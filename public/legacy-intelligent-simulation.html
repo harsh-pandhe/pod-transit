@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Transit - Intelligent Orchestration System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
+        
+        body {
+            font-family: 'Outfit', sans-serif;
+        }
+        
+        .neural-pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        
+        .brain-active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #1a1f36;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #3a4568;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 overflow-hidden">
+    <div id="app" class="w-screen h-screen flex flex-col">
+        <!-- Header -->
+        <header class="bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700 px-6 py-4 flex justify-between items-center z-20 shadow-2xl">
+            <div class="flex items-center space-x-4">
+                <div class="bg-gradient-to-br from-purple-600 to-blue-600 p-2 rounded-lg">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M8 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM15 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                        <path d="M3 4a1 1 0 00-1 1v10a1 1 0 001 1h1.05a2.5 2.5 0 014.9 0H10a1 1 0 001-1V5a1 1 0 00-1-1H3zM14 7a1 1 0 00-1 1v6.05A2.5 2.5 0 0115.95 16H17a1 1 0 001-1v-5a1 1 0 00-.293-.707l-2-2A1 1 0 0015 7h-1z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-3xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">Pod Intelligence System</h1>
+                    <p class="text-xs text-slate-400">Central Brain + Per-Pod Decision Making</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="text-right">
+                    <div class="text-lg font-bold text-slate-100" id="tickDisplay">Tick: 0</div>
+                    <div class="text-xs text-slate-400" id="statusDisplay">Ready</div>
+                </div>
+                <button onclick="toggleSimulation()" class="px-6 py-2 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-lg font-semibold transition-all">
+                    ▶ Start
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex overflow-hidden">
+            <!-- Left Panel - Central Brain -->
+            <div class="w-1/4 border-r border-slate-700 bg-slate-800/30 flex flex-col overflow-hidden">
+                <div class="p-4 border-b border-slate-700 bg-slate-800/50">
+                    <h2 class="text-lg font-bold text-cyan-400 flex items-center mb-3">
+                        <span class="w-2 h-2 bg-cyan-400 rounded-full mr-2 neural-pulse"></span>
+                        Central Brain
+                    </h2>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Network Health:</span>
+                            <span id="centralHealth" class="text-cyan-300 font-mono">100%</span>
+                        </div>
+                        <div class="w-full bg-slate-700 rounded-full h-2">
+                            <div id="healthBar" class="bg-gradient-to-r from-cyan-500 to-blue-500 h-2 rounded-full w-full transition-all"></div>
+                        </div>
+                        <div class="flex justify-between text-xs pt-2">
+                            <span class="text-slate-500">Active Pods:</span>
+                            <span id="activePods" class="text-emerald-400">0/0</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-500">Avg Battery:</span>
+                            <span id="avgBattery" class="text-amber-400">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Decision Log -->
+                <div class="flex-1 overflow-hidden flex flex-col">
+                    <div class="px-4 py-3 text-sm font-semibold text-slate-300 border-b border-slate-700">
+                        Orchestration Commands
+                    </div>
+                    <div id="commandLog" class="flex-1 overflow-y-auto scrollbar-thin space-y-2 p-4">
+                        <div class="text-xs text-slate-500 italic">Waiting for commands...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Panel - Network Visualization -->
+            <div class="flex-1 relative overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                <svg id="networkSvg" class="w-full h-full" viewBox="0 0 800 600">
+                    <defs>
+                        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(100,116,139,0.1)" stroke-width="1"/>
+                        </pattern>
+                        <filter id="glow">
+                            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid)"/>
+                    <g id="edges"></g>
+                    <g id="nodes"></g>
+                    <g id="pods"></g>
+                </svg>
+
+                <!-- Network Legend -->
+                <div class="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur border border-slate-700 p-4 rounded-lg text-xs space-y-2">
+                    <div class="font-bold text-cyan-400 border-b border-slate-700 pb-2">Network Legend</div>
+                    <div class="flex items-center"><div class="w-3 h-3 rounded-full border-2 border-blue-400 mr-2"></div> Station</div>
+                    <div class="flex items-center"><div class="w-3 h-3 rounded-full border-2 border-amber-400 mr-2"></div> Depot</div>
+                    <div class="flex items-center"><div class="w-3 h-3 rounded border border-cyan-400 mr-2"></div> Active Pod</div>
+                    <div class="flex items-center"><div class="w-3 h-3 rounded border border-emerald-400 mr-2"></div> En Route</div>
+                </div>
+            </div>
+
+            <!-- Right Panel - Pod Status -->
+            <div class="w-1/4 border-l border-slate-700 bg-slate-800/30 flex flex-col overflow-hidden">
+                <div class="p-4 border-b border-slate-700 bg-slate-800/50">
+                    <h2 class="text-lg font-bold text-emerald-400 flex items-center mb-3">
+                        <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 neural-pulse"></span>
+                        Fleet Status
+                    </h2>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div class="bg-slate-900/50 p-2 rounded border border-slate-700">
+                            <div class="text-slate-400">Efficiency</div>
+                            <div id="efficiency" class="text-lg font-bold text-emerald-400">--</div>
+                        </div>
+                        <div class="bg-slate-900/50 p-2 rounded border border-slate-700">
+                            <div class="text-slate-400">Utilization</div>
+                            <div id="utilization" class="text-lg font-bold text-blue-400">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pod List -->
+                <div class="flex-1 overflow-hidden flex flex-col">
+                    <div class="px-4 py-3 text-sm font-semibold text-slate-300 border-b border-slate-700">
+                        Pod Units
+                    </div>
+                    <div id="podList" class="flex-1 overflow-y-auto scrollbar-thin space-y-2 p-4">
+                        <div class="text-xs text-slate-500 italic">Initializing pods...</div>
+                    </div>
+                </div>
+
+                <!-- Network Selector -->
+                <div class="px-4 py-3 border-t border-slate-700 bg-slate-800/50">
+                    <label class="text-xs text-slate-400 block mb-2">Select Network:</label>
+                    <select id="networkSelect" onchange="changeNetwork()" class="w-full bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded p-2">
+                        <option value="mumbai">Mumbai Metro</option>
+                        <option value="pune">Pune City</option>
+                        <option value="nashik">Nashik City</option>
+                        <option value="manesar">Manesar Industrial</option>
+                        <option value="udyog_vihar">Udyog Vihar</option>
+                        <option value="goa">Goa-MOPA</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Template for pod item -->
+    <template id="podTemplate">
+        <div class="bg-slate-900/50 border border-slate-700 rounded-lg p-3">
+            <div class="flex justify-between items-start mb-2">
+                <div class="font-bold text-sm" style="color: var(--pod-color);" id="podId">P00</div>
+                <div class="text-xs px-2 py-1 rounded" style="background-color: var(--status-bg); color: var(--status-color);" id="podStatus">idle</div>
+            </div>
+            <div class="text-xs space-y-1">
+                <div class="flex justify-between">
+                    <span class="text-slate-500">Location:</span>
+                    <span id="podLocation" class="text-slate-300">--</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-slate-500">Battery:</span>
+                    <span id="podBattery" class="text-amber-400 font-mono">--</span>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-1.5 mt-1">
+                    <div id="podBatteryBar" class="bg-gradient-to-r from-amber-500 to-red-500 h-1.5 rounded-full w-full"></div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script type="module">
+        import SimulationOrchestrator from './simulation-orchestrator.js';
+
+        let orchestrator = new SimulationOrchestrator('mumbai', 8);
+        let isSimulationRunning = false;
+        let simulationInterval = null;
+
+        // Initialize UI
+        initializeUI();
+
+        function initializeUI() {
+            renderNetwork();
+            updatePodList();
+        }
+
+        function renderNetwork() {
+            const svg = document.getElementById('networkSvg');
+            svg.innerHTML = '';
+            
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            defs.innerHTML = `
+                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(100,116,139,0.1)" stroke-width="1"/>
+                </pattern>
+                <filter id="glow">
+                    <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            `;
+            svg.appendChild(defs);
+            
+            // Background
+            const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            bg.setAttribute('width', '100%');
+            bg.setAttribute('height', '100%');
+            bg.setAttribute('fill', 'url(#grid)');
+            svg.appendChild(bg);
+            
+            const edgesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            const nodesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            
+            // Draw edges
+            orchestrator.network.edges.forEach(([a, b]) => {
+                const na = orchestrator.network.nodes[a];
+                const nb = orchestrator.network.nodes[b];
+                
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', na.x);
+                line.setAttribute('y1', na.y);
+                line.setAttribute('x2', nb.x);
+                line.setAttribute('y2', nb.y);
+                line.setAttribute('stroke', '#334155');
+                line.setAttribute('stroke-width', '2');
+                edgesGroup.appendChild(line);
+            });
+            
+            // Draw nodes
+            orchestrator.network.getAllNodes().forEach(nodeId => {
+                const node = orchestrator.network.nodes[nodeId];
+                const isDepot = node.type === 'depot';
+                
+                const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                group.setAttribute('transform', `translate(${node.x}, ${node.y})`);
+                
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('r', isDepot ? '8' : '5');
+                circle.setAttribute('fill', '#0f172a');
+                circle.setAttribute('stroke', isDepot ? '#f59e0b' : '#3b82f6');
+                circle.setAttribute('stroke-width', '2');
+                group.appendChild(circle);
+                
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', '10');
+                text.setAttribute('y', '4');
+                text.setAttribute('fill', isDepot ? '#fcd34d' : '#cbd5e1');
+                text.setAttribute('font-size', '10');
+                text.setAttribute('font-weight', '500');
+                text.textContent = nodeId;
+                group.appendChild(text);
+                
+                nodesGroup.appendChild(group);
+            });
+            
+            svg.appendChild(edgesGroup);
+            svg.appendChild(nodesGroup);
+        }
+
+        function updatePodList() {
+            const container = document.getElementById('podList');
+            container.innerHTML = '';
+            
+            orchestrator.pods.forEach(pod => {
+                const template = document.getElementById('podTemplate');
+                const clone = template.content.cloneNode(true);
+                
+                const statusColors = {
+                    'idle': ['#334155', '#9ca3af'],
+                    'moving': ['#065f46', '#10b981'],
+                    'carrying': ['#1f2937', '#3b82f6'],
+                    'charging': ['#78350f', '#f59e0b'],
+                };
+                
+                const [bgColor, textColor] = statusColors[pod.status] || statusColors['idle'];
+                
+                clone.getElementById('podId').textContent = pod.id;
+                clone.getElementById('podId').style.color = textColor;
+                clone.getElementById('podStatus').textContent = pod.status;
+                clone.getElementById('podStatus').style.backgroundColor = bgColor;
+                clone.getElementById('podStatus').style.color = textColor;
+                clone.getElementById('podLocation').textContent = pod.currentNode;
+                clone.getElementById('podBattery').textContent = Math.floor(pod.battery) + '%';
+                clone.getElementById('podBatteryBar').style.width = pod.battery + '%';
+                
+                container.appendChild(clone);
+            });
+        }
+
+        window.toggleSimulation = function() {
+            if (isSimulationRunning) {
+                orchestrator.stop();
+                isSimulationRunning = false;
+                clearInterval(simulationInterval);
+                document.querySelector('button').textContent = '▶ Start';
+            } else {
+                orchestrator.start();
+                isSimulationRunning = true;
+                simulationInterval = setInterval(() => {
+                    orchestrator.step();
+                    updateUI();
+                }, 50);
+                document.querySelector('button').textContent = '⏸ Stop';
+            }
+        };
+
+        window.changeNetwork = function() {
+            const networkKey = document.getElementById('networkSelect').value;
+            orchestrator = new SimulationOrchestrator(networkKey, 8);
+            isSimulationRunning = false;
+            if (simulationInterval) clearInterval(simulationInterval);
+            document.querySelector('button').textContent = '▶ Start';
+            initializeUI();
+            updateUI();
+        };
+
+        function updateUI() {
+            const status = orchestrator.getSystemStatus();
+            
+            document.getElementById('tickDisplay').textContent = `Tick: ${status.tick}`;
+            document.getElementById('statusDisplay').textContent = isSimulationRunning ? '⚙ Running' : 'Paused';
+            
+            const centralStatus = status.centralBrain;
+            document.getElementById('centralHealth').textContent = Math.round(centralStatus.networkHealth) + '%';
+            document.getElementById('healthBar').style.width = centralStatus.networkHealth + '%';
+            
+            const activePods = status.pods.filter(p => p.status !== 'charging').length;
+            document.getElementById('activePods').textContent = `${activePods}/${status.pods.length}`;
+            
+            const avgBatt = (status.pods.reduce((sum, p) => sum + p.battery, 0) / status.pods.length).toFixed(0);
+            document.getElementById('avgBattery').textContent = avgBatt + '%';
+            
+            document.getElementById('efficiency').textContent = Math.round(status.stats.networkEfficiency) + '%';
+            document.getElementById('utilization').textContent = Math.round((activePods / status.pods.length) * 100) + '%';
+            
+            updatePodList();
+            updateCommandLog(status.centralBrain.logs);
+        }
+
+        function updateCommandLog(logs) {
+            const container = document.getElementById('commandLog');
+            container.innerHTML = '';
+            
+            logs.slice(-5).reverse().forEach(log => {
+                const div = document.createElement('div');
+                div.className = 'text-xs p-2 bg-slate-900/30 border border-slate-700 rounded text-slate-300';
+                div.textContent = `[${log}] Decision made`;
+                container.appendChild(div);
+            });
+        }
+
+        // Initial update
+        updateUI();
+    </script>
+</body>
+</html>

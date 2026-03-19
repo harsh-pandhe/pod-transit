@@ -1,0 +1,758 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Map, Smartphone, LayoutDashboard, Battery,
+  AlertTriangle, Users, MapPin, Zap, Shield,
+  Play, Pause, RefreshCw, Car
+} from 'lucide-react';
+import { UltraSimCore } from './api/ultra-sim-core.js';
+
+const STATIONS_COUNT = 10;
+const RADIUS = 220;
+const CENTER = { x: 400, y: 300 };
+
+const NODES = {};
+for (let i = 0; i < STATIONS_COUNT; i++) {
+  const angle = (i / STATIONS_COUNT) * (2 * Math.PI) - Math.PI / 2;
+  const name = `Station ${i + 1}`;
+  NODES[name] = {
+    x: CENTER.x + Math.cos(angle) * RADIUS,
+    y: CENTER.y + Math.sin(angle) * RADIUS,
+    name: name,
+    type: 'station',
+    angle: angle
+  };
+}
+
+// Add a central depot
+NODES['Central Depot'] = { x: CENTER.x, y: CENTER.y, name: 'Central Depot', type: 'depot' };
+
+// Add a connection to a "Big Network" (off-screen)
+NODES['Gateway'] = { x: 750, y: 100, name: 'External Network', type: 'gateway' };
+
+const EDGES = [];
+// Circle edges
+for (let i = 0; i < STATIONS_COUNT; i++) {
+  const start = `Station ${i + 1}`;
+  const end = `Station ${((i + 1) % STATIONS_COUNT) + 1}`;
+  EDGES.push([start, end]);
+}
+
+// Depot connections
+EDGES.push(['Station 1', 'Central Depot']);
+EDGES.push(['Station 6', 'Central Depot']);
+
+// Gateway connection
+EDGES.push(['Station 3', 'Gateway']);
+
+// Helper: Build adjacency list
+const ADJ_LIST = {};
+Object.keys(NODES).forEach(n => ADJ_LIST[n] = []);
+EDGES.forEach(([a, b]) => {
+  ADJ_LIST[a].push(b);
+  ADJ_LIST[b].push(a);
+});
+
+// Helper: Dijkstra's Algorithm for true distance-based shortest path
+function getShortestPath(start, end) {
+  if (start === end) return [];
+
+  const distances = {};
+  const previous = {};
+  const unvisited = new Set(Object.keys(NODES));
+
+  Object.keys(NODES).forEach(node => {
+    distances[node] = Infinity;
+    previous[node] = null;
+  });
+  distances[start] = 0;
+
+  while (unvisited.size > 0) {
+    let currNode = null;
+    let minDistance = Infinity;
+
+    // Find unvisited node with the smallest distance
+    for (let node of unvisited) {
+      if (distances[node] < minDistance) {
+        minDistance = distances[node];
+        currNode = node;
+      }
+    }
+
+    if (currNode === null || currNode === end) break;
+    unvisited.delete(currNode);
+
+    // Calculate actual geometric distance to neighbors
+    for (let neighbor of ADJ_LIST[currNode]) {
+      if (unvisited.has(neighbor)) {
+        const n1 = NODES[currNode];
+        const n2 = NODES[neighbor];
+        const edgeWeight = Math.hypot(n2.x - n1.x, n2.y - n1.y); // Physical distance
+        const alt = distances[currNode] + edgeWeight;
+
+        if (alt < distances[neighbor]) {
+          distances[neighbor] = alt;
+          previous[neighbor] = currNode;
+        }
+      }
+    }
+  }
+
+  // Backtrack to build the path array
+  const path = [];
+  let curr = end;
+  if (previous[curr] !== null || curr === start) {
+    while (curr !== null) {
+      path.unshift(curr);
+      curr = previous[curr];
+    }
+  }
+  return path.length > 0 ? path.slice(1) : []; // Exclude starting node
+}
+
+const INITIAL_PODS = [
+  { id: 'P01', currentNode: 'Station 1', nextNode: 'Station 2', path: [], progress: 0.5, status: 'idle', battery: 85, type: 'standard', track: 'main' },
+  { id: 'P02', currentNode: 'Station 3', nextNode: 'Station 4', path: ['Station 5', 'Station 6'], progress: 0.2, status: 'moving', battery: 92, type: 'standard', track: 'main' },
+  { id: 'P03', currentNode: 'Station 7', nextNode: 'Station 8', path: ['Station 9', 'Station 10'], progress: 0.8, status: 'moving', battery: 78, type: 'standard', track: 'main' },
+  { id: 'P04', currentNode: 'Station 1', nextNode: 'Central Depot', path: [], progress: 0.1, status: 'moving', battery: 15, type: 'standard', track: 'main' },
+  { id: 'P05', currentNode: 'Station 5', nextNode: 'Station 6', path: [], progress: 0.9, status: 'idle', battery: 100, type: 'women-only', track: 'main' },
+  { id: 'P06', currentNode: 'Station 10', nextNode: 'Station 1', path: ['Station 2', 'Station 3'], progress: 0.5, status: 'moving', battery: 60, type: 'standard', track: 'main' },
+  { id: 'P07', currentNode: 'Station 2', nextNode: 'Station 3', path: ['Station 4', 'Station 5'], progress: 0.1, status: 'moving', battery: 88, type: 'standard', track: 'main' },
+  { id: 'P08', currentNode: 'Central Depot', nextNode: 'Central Depot', path: [], progress: 0, status: 'charging', battery: 40, type: 'standard', track: 'main' },
+];
+
+export default function PodTransitPrototype() {
+  const [activeTab, setActiveTab] = useState('simulation');
+  const [simRunning, setSimRunning] = useState(false);
+  const simCore = useRef(null);
+  if (!simCore.current) simCore.current = new UltraSimCore({ nodes: NODES, edges: EDGES });
+  const [snapshot, setSnapshot] = useState(simCore.current.getSnapshot());
+  const pods = snapshot.vehicles;
+  const simTime = snapshot.timeSec / 60;
+  const stationPeople = snapshot.waitingByStation;
+  const [notifications, setNotifications] = useState([]);
+  const [obstacle, setObstacle] = useState(null);
+  const [passengerState, setPassengerState] = useState({ origin: 'Station 1', destination: 'Station 5', type: 'standard', status: 'idle', assignedPod: null });
+  const [demandHeatmap, setDemandHeatmap] = useState({});
+  const [rvGraph, setRvGraph] = useState(null);
+  const [rebalanceActive, setRebalanceActive] = useState(false);
+
+  const addNotification = (msg) => {
+    setNotifications(prev => [{ id: Date.now() + Math.random(), time: new Date().toLocaleTimeString(), msg }, ...prev].slice(0, 5));
+  };
+
+  // --- Demand Heatmap: Track requests per station over time ---
+  const updateDemandHeatmap = (station) => {
+    setDemandHeatmap(prev => ({
+      ...prev,
+      [station]: (prev[station] || 0) + 1
+    }));
+  };
+
+  // --- RV-Graph: Request-Vehicle Shareability Graph ---
+  // This calculates optimal pod-passenger matching considering route overlap
+  const buildRVGraph = (passengers, availablePods) => {
+    if (passengers.length === 0 || availablePods.length === 0) return null;
+
+    const graph = {
+      passengers: passengers,
+      vehicles: availablePods,
+      edges: [],
+      metrics: {
+        possibleMatches: 0,
+        shareable: 0,
+        nonShareable: 0
+      }
+    };
+
+    passengers.forEach(passenger => {
+      availablePods.forEach(pod => {
+        const passengerPath = getShortestPath(passenger.origin, passenger.destination);
+        const podPath = getShortestPath(pod.currentNode, pod.nextNode || pod.currentNode);
+
+        // Calculate route overlap
+        const overlap = passengerPath.filter(node => podPath.includes(node)).length;
+        const shareability = overlap > 0;
+
+        if (shareability) {
+          graph.metrics.shareable++;
+          graph.edges.push({
+            passenger: passenger.id,
+            vehicle: pod.id,
+            overlap: overlap,
+            detour: Math.abs(passengerPath.length - overlap)
+          });
+        } else {
+          graph.metrics.nonShareable++;
+        }
+      });
+    });
+
+    graph.metrics.possibleMatches = passengers.length * availablePods.length;
+    return graph;
+  };
+
+  // --- Platooning Detection: Find pods moving in sync ---
+  const detectPlatooning = (allPods) => {
+    const platoons = [];
+    const HEADWAY_THRESHOLD = 50;
+    const SPEED_MATCH_THRESHOLD = 0.1;
+
+    for (let i = 0; i < allPods.length; i++) {
+      for (let j = i + 1; j < allPods.length; j++) {
+        const p1 = allPods[i];
+        const p2 = allPods[j];
+
+        if (p1.nextNode === p2.nextNode && p1.status === 'moving' && p2.status === 'moving') {
+          const n1 = NODES[p1.currentNode];
+          const n2 = NODES[p1.nextNode];
+
+          if (!n1 || !n2) continue;
+
+          const pos1 = { x: n1.x + (n2.x - n1.x) * p1.progress, y: n1.y + (n2.y - n1.y) * p1.progress };
+          const pos2 = { x: n1.x + (n2.x - n1.x) * p2.progress, y: n1.y + (n2.y - n1.y) * p2.progress };
+
+          const distance = Math.hypot(pos2.x - pos1.x, pos2.y - pos1.y);
+          const speedDiff = Math.abs(p1.progress - p2.progress);
+
+          if (distance <= HEADWAY_THRESHOLD && speedDiff <= SPEED_MATCH_THRESHOLD) {
+            platoons.push({ pods: [p1.id, p2.id], headway: distance, route: p1.nextNode });
+          }
+        }
+      }
+    }
+    return platoons;
+  };
+
+  // --- Fleet Rebalancing AI (Central Brain) ---
+  const rebalanceFleet = (currentPods) => {
+    const stationDemand = Object.entries(demandHeatmap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+
+    if (stationDemand.length === 0) return;
+
+    const idlePods = currentPods.filter(p => p.status === 'idle' && p.battery > 50);
+
+    stationDemand.forEach(([station, demand]) => {
+      let bestPod = null;
+      let shortestDist = Infinity;
+
+      idlePods.forEach(pod => {
+        if (pod.path.length === 0 && pod.currentNode !== station) {
+          const path = getShortestPath(pod.currentNode, station);
+          if (path.length > 0 && path.length < shortestDist) {
+            shortestDist = path.length;
+            bestPod = pod;
+          }
+        }
+      });
+
+      if (bestPod && demand > 3) {
+        addNotification(`� Brain: Rebalancing ${bestPod.id} to ${station}`);
+        setRebalanceActive(true);
+
+        setPods(prev => prev.map(p =>
+          p.id === bestPod.id
+            ? { ...p, status: 'moving', track: 'main', path: getShortestPath(p.currentNode, station), nextNode: getShortestPath(p.currentNode, station)[0] }
+            : p
+        ));
+      }
+    });
+  };
+
+  // --- Simulation Loop ---
+  useEffect(() => {
+    if (!simRunning) return;
+    const interval = setInterval(() => {
+      setSnapshot(simCore.current.step(2));
+    }, 50);
+    return () => clearInterval(interval);
+  }, [simRunning]);
+
+  const handleFastForward = () => {
+    simCore.current.runFastForward(); // run to end or run warmup
+    setSnapshot(simCore.current.getSnapshot());
+  };
+
+  const showResults = () => {
+    const results = simCore.current.getResults();
+    alert(`Simulation Results:
+Mean Wait: ${results.overallMeanWaitSec}s
+% <60s: ${results.overallUnder60Pct}%
+Fleet Used: ${results.vehiclesUsed}`);
+  };
+
+
+  // --- Handlers ---
+  const handleBookRide = () => {
+    addNotification(`Manual booking requested for ${passengerState.origin} -> ${passengerState.destination}`);
+    if (simCore.current && passengerState.origin !== passengerState.destination) {
+        simCore.current.stations[passengerState.origin].queue.push({
+           id: `Manual_${Date.now()}`,
+           origin: passengerState.origin,
+           dest: passengerState.destination,
+           arrivalSec: simCore.current.timeSec,
+           groupSize: 1
+        });
+        setPassengerState(prev => ({ ...prev, status: 'waiting', assignedPod: 'AI Dispatch' }));
+    } else {
+        addNotification("Origin and Destination cannot be the same!");
+    }
+  };
+
+  const triggerObstacle = () => {
+    if (obstacle) {
+      setObstacle(null);
+      addNotification("Network cleared. Pods resuming normal operation.");
+    } else {
+      setObstacle({ edge: ['Bandra', 'BKC'] });
+      addNotification("CRITICAL: Debris detected between Bandra and BKC!");
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
+      {/* Header */}
+      <header className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center z-10 shadow-md">
+        <div className="flex items-center space-x-3">
+          <div className="bg-blue-600 p-2 rounded-lg">
+            <Zap size={24} className="text-white" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-white">Mumbai Pod Network</h1>
+          <span className="ml-4 px-3 py-1 bg-slate-700 rounded-full text-xs font-medium text-slate-300 border border-slate-600">
+            Graph Routing v2
+          </span>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setSimRunning(!simRunning)}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors ${simRunning ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'}`}
+          >
+            {simRunning ? <><Pause size={18} className="mr-2" /> Pause Sim</> : <><Play size={18} className="mr-2" /> Resume Sim</>}
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar Navigation */}
+        <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col">
+          <nav className="flex-1 p-4 space-y-2">
+            <NavItem icon={<Map size={20} />} label="Network Map" active={activeTab === 'simulation'} onClick={() => setActiveTab('simulation')} />
+            <NavItem icon={<Smartphone size={20} />} label="Passenger App" active={activeTab === 'passenger'} onClick={() => setActiveTab('passenger')} />
+            <NavItem icon={<LayoutDashboard size={20} />} label="Fleet Dashboard" active={activeTab === 'operator'} onClick={() => setActiveTab('operator')} />
+          </nav>
+
+          {/* Station Demand Controls & Feed */}
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex-1 overflow-y-auto">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Station Demand Sliders</h3>
+            <div className="space-y-4 mb-6">
+               {Object.keys(NODES).filter(n => NODES[n].type === 'station').map(station => (
+                 <div key={station} className="space-y-1">
+                   <div className="flex justify-between text-xs text-slate-300">
+                     <span>{station}</span>
+                     <span>{simCore.current.stationDemand[station] * 10}%</span>
+                   </div>
+                   <input type="range" min="1" max="10" defaultValue={simCore.current.stationDemand[station]} className="w-full h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer" onChange={(e) => {
+                     const newDemand = { ...simCore.current.stationDemand, [station]: parseInt(e.target.value) };
+                     simCore.current.setStationDemand(newDemand);
+                     setSnapshot({...simCore.current.getSnapshot()});
+                   }}/>
+                 </div>
+               ))}
+            </div>
+
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Live Network Events</h3>
+            <div className="space-y-3">
+              {notifications.map(n => (
+                <div key={n.id} className="text-sm text-slate-300 animate-fade-in flex items-start leading-tight">
+                  <span className="text-slate-500 text-xs mr-2 mt-0.5 whitespace-nowrap">{n.time}</span>
+                  <span className={n.msg.includes('Alert') || n.msg.includes('CRITICAL') ? 'text-red-400' : ''}>{n.msg}</span>
+                </div>
+              ))}
+              {notifications.length === 0 && <div className="text-sm text-slate-500 italic">No recent events...</div>}
+            </div>
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        <main className="flex-1 relative bg-slate-900 overflow-y-auto">
+
+          {/* View 1: Digital Twin Simulation (Network Mess) */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 ${activeTab === 'simulation' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="max-w-6xl mx-auto h-full flex flex-col">
+              <div className="flex justify-between items-end mb-4 shrink-0">
+                <div>
+                  <h2 className="text-3xl font-bold text-white mb-2">Central Brain Simulation</h2>
+                  <p className="text-slate-400">10-Station Dual-Track Network | Time: {Math.floor(simTime / 60)}:{String(simTime % 60).padStart(2, '0')} {simTime < 720 ? 'AM' : 'PM'}</p>
+                </div>
+                <div className="flex space-x-4 items-center">
+                  <div className="bg-slate-800 rounded-full px-4 py-2 border border-slate-700 flex items-center shadow-lg">
+                    <div className={`w-3 h-3 rounded-full mr-2 ${simTime > 360 && simTime < 1080 ? 'bg-yellow-400' : 'bg-slate-400'}`}></div>
+                    <span className="text-xs font-bold text-slate-300">{simTime > 360 && simTime < 1080 ? 'DAY CYCLE' : 'NIGHT CYCLE'}</span>
+                  </div>
+                  <button onClick={handleFastForward} className="flex items-center px-4 py-2 rounded-lg font-medium bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 mr-2">
+                    Fast Forward Cycle
+                  </button>
+                  <button onClick={showResults} className="flex items-center px-4 py-2 rounded-lg font-medium bg-blue-500/20 text-blue-400 hover:bg-blue-500/30">
+                    Results KPI
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden relative flex-1 min-h-[500px]">
+                <svg width="100%" height="100%" viewBox="0 0 800 600" className={`w-full h-full transition-colors duration-1000 ${simTime > 360 && simTime < 1080 ? 'bg-[#f8fafc]' : 'bg-[#e2e8f0]'}`}>
+                  <defs>
+                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(0,0,0,0.04)" strokeWidth="1" />
+                    </pattern>
+                    <marker id="arrow-main" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffffff" />
+                    </marker>
+                    <marker id="arrow-dock" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffffff" />
+                    </marker>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#grid)" />
+
+                  {/* Draw Edges with Dual Tracks */}
+                  {EDGES.map((edge, i) => {
+                    const n1 = NODES[edge[0]];
+                    const n2 = NODES[edge[1]];
+                    if (!n1 || !n2) return null;
+
+                    const isCircular = edge[0].startsWith('Station') && edge[1].startsWith('Station');
+
+                    if (isCircular) {
+                      return (
+                        <g key={i}>
+                          <path d={`M ${n1.x} ${n1.y} A ${RADIUS} ${RADIUS} 0 0 1 ${n2.x} ${n2.y}`} fill="none" stroke="#0f172a" strokeWidth="6" markerEnd="url(#arrow-dock)" />
+                          <path d={`M ${CENTER.x + (n1.x - CENTER.x) * (RADIUS + 20) / RADIUS} ${CENTER.y + (n1.y - CENTER.y) * (RADIUS + 20) / RADIUS} A ${RADIUS + 20} ${RADIUS + 20} 0 0 1 ${CENTER.x + (n2.x - CENTER.x) * (RADIUS + 20) / RADIUS} ${CENTER.y + (n2.y - CENTER.y) * (RADIUS + 20) / RADIUS}`} fill="none" stroke="#0f172a" strokeWidth="8" markerEnd="url(#arrow-main)" />
+                        </g>
+                      );
+                    }
+                    return <line key={i} x1={n1.x} y1={n1.y} x2={n2.x} y2={n2.y} stroke="#0f172a" strokeWidth="4" strokeDasharray="6 4" />;
+                  })}
+
+                  {/* Draw Nodes */}
+                  {Object.values(NODES).map(node => (
+                    <g key={node.name} transform={`translate(${node.x}, ${node.y}) rotate(${node.angle ? node.angle * 180 / Math.PI : 0})`}>
+                      {node.type === 'depot' ? (
+                        <polygon points="0,-16 16,0 0,16 -16,0" fill="#facc15" stroke="#0f172a" strokeWidth="3" />
+                      ) : node.type === 'gateway' ? (
+                        <rect x="-12" y="-12" width="24" height="24" rx="4" fill="#8b5cf6" stroke="#0f172a" strokeWidth="3" />
+                      ) : (
+                        <g>
+                          <circle r="12" fill="#3b82f6" stroke="#0f172a" strokeWidth="3" />
+                          <circle cx="-16" cy="0" r="5" fill="#ffffff" stroke="#0f172a" strokeWidth="2" />
+                          <circle cx="16" cy="0" r="5" fill="#ffffff" stroke="#0f172a" strokeWidth="2" />
+                        </g>
+                      )}
+                      
+                      <text transform={`rotate(${- (node.angle ? node.angle * 180 / Math.PI : 0)})`} x="20" y="5" fill="#1e293b" fontSize="12" fontWeight="bold" style={{ userSelect: 'none' }}>{node.name}</text>
+                      
+                      {node.type === 'station' && stationPeople[node.name] > 0 && (
+                        <g transform={`rotate(${- (node.angle ? node.angle * 180 / Math.PI : 0)}) translate(0, -24)`}>
+                          <rect x="-12" y="-8" width="24" height="14" rx="4" fill="#10b981" />
+                          <text y="3" fill="white" fontSize="10" textAnchor="middle" fontWeight="bold">{stationPeople[node.name]}</text>
+                        </g>
+                      )}
+                    </g>
+                  ))}
+
+                  {/* Draw Pods */}
+                  {pods.map(pod => {
+                    const n1 = NODES[pod.node];
+                    const n2 = NODES[pod.nextNode] || n1;
+                    if (!n1 || !n2) return null;
+
+                    const p_prog = pod.edgeTravelSec > 0 ? pod.edgeProgressSec / pod.edgeTravelSec : 0;
+                    const offset = 20;
+                    const r1 = pod.node.startsWith('Station') ? RADIUS + offset : Math.hypot(n1.x - CENTER.x, n1.y - CENTER.y);
+                    const r2 = (pod.nextNode || pod.node).startsWith('Station') ? RADIUS + offset : Math.hypot(n2.x - CENTER.x, n2.y - CENTER.y);
+
+                    const a1 = Math.atan2(n1.y - CENTER.y, n1.x - CENTER.x);
+                    const a2 = Math.atan2(n2.y - CENTER.y, n2.x - CENTER.x);
+                    let diff = a2 - a1;
+                    if (diff > Math.PI) diff -= 2 * Math.PI;
+                    if (diff < -Math.PI) diff += 2 * Math.PI;
+
+                    const angle = a1 + diff * p_prog;
+                    const r = r1 + (r2 - r1) * p_prog;
+                    const x = CENTER.x + Math.cos(angle) * r;
+                    const y = CENTER.y + Math.sin(angle) * r;
+
+                    let rotation = (angle * 180 / Math.PI) + 90;
+                    let color = '#ef4444'; // Red default
+                    if (pod.state === 'boarding' || pod.state === 'moving_loaded') color = '#22c55e'; // Green
+                    else if (pod.state === 'unloading') color = '#3b82f6'; // Blue
+                    else if (pod.state === 'waiting_slot') color = '#94a3b8'; // Grey
+
+                    return (
+                      <g key={pod.id} transform={`translate(${x}, ${y}) rotate(${rotation})`}>
+                        <circle cx="0" cy="0" r="7" fill={color} stroke="#0f172a" strokeWidth="2" />
+                        <g transform={`rotate(${-rotation})`}>
+                          <rect x="-9" y="-18" width="18" height="10" rx="2" fill="#0f172a" />
+                          <text x="0" y="-10" fill="white" fontSize="8" textAnchor="middle" fontWeight="bold">{pod.id.replace('P', '')}</text>
+                        </g>
+                      </g>
+                    )
+                  })}
+                </svg>
+
+                {/* Legend Overlay */}
+                <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur border border-slate-200 p-3 rounded-lg text-xs space-y-2 shadow-xl text-slate-800">
+                  <div className="font-bold border-b border-slate-200 pb-1 mb-2">PRT Simulation Status</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-[#22c55e] border border-slate-800 mr-2"></div> Boarding / Moving (Occupied)</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-[#3b82f6] border border-slate-800 mr-2"></div> Unloading at Station</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-[#ef4444] border border-slate-800 mr-2"></div> Empty / Ready / Moving to Demand</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-[#94a3b8] border border-slate-800 mr-2"></div> Halted / Waiting for clear slot</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-[#eab308] border border-slate-800 mr-2"></div> Low Battery / Charging (in Depot)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* View 2: Passenger App */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 flex justify-center items-center ${activeTab === 'passenger' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="w-[380px] h-[700px] bg-white rounded-[40px] border-[8px] border-slate-800 overflow-hidden relative shadow-2xl flex flex-col font-sans text-slate-800">
+              <div className="bg-white px-6 pt-3 pb-2 flex justify-between items-center text-xs font-semibold z-20">
+                <span>9:41</span>
+                <div className="flex space-x-1"><Battery size={14} /></div>
+              </div>
+
+              {/* Map Mockup */}
+              <div className="absolute inset-0 bg-[#e2e8f0] z-0 opacity-50 flex items-center justify-center overflow-hidden">
+                <svg width="200%" height="200%" style={{ opacity: 0.3 }}>
+                  {EDGES.map((edge, i) => (
+                    <line key={i} x1={NODES[edge[0]].x} y1={NODES[edge[0]].y} x2={NODES[edge[1]].x} y2={NODES[edge[1]].y} stroke="#64748b" strokeWidth="3" />
+                  ))}
+                </svg>
+              </div>
+
+              <div className="flex-1 z-10 flex flex-col relative">
+                <div className="p-6">
+                  <h1 className="text-2xl font-bold mb-1">Where to?</h1>
+                  <p className="text-slate-500 text-sm mb-6">Point-to-point via the Graph Network.</p>
+
+                  <div className="bg-white rounded-2xl shadow-lg p-4 space-y-4 mb-6">
+                    <div className="relative">
+                      <div className="absolute left-3 top-3.5 w-2 h-2 rounded-full bg-blue-500"></div>
+                      <div className="absolute left-3.5 top-6 w-0.5 h-6 bg-slate-200"></div>
+                      <select
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={passengerState.origin}
+                        onChange={(e) => setPassengerState({ ...passengerState, origin: e.target.value })}
+                        disabled={passengerState.status !== 'idle'}
+                      >
+                        {Object.values(NODES).filter(s => s.type === 'station').map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="relative">
+                      <div className="absolute left-3 top-3.5 w-2 h-2 rounded-none bg-emerald-500"></div>
+                      <select
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={passengerState.destination}
+                        onChange={(e) => setPassengerState({ ...passengerState, destination: e.target.value })}
+                        disabled={passengerState.status !== 'idle'}
+                      >
+                        {Object.values(NODES).filter(s => s.type === 'station').map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl shadow-lg p-4 mb-6">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Preferences</h3>
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center text-sm font-medium">
+                        <Shield size={16} className="text-pink-500 mr-2" />
+                        Women-Only Pod
+                      </div>
+                      <div className={`w-10 h-6 rounded-full transition-colors ${passengerState.type === 'women-only' ? 'bg-pink-500' : 'bg-slate-200'} relative`}
+                        onClick={() => passengerState.status === 'idle' && setPassengerState({ ...passengerState, type: passengerState.type === 'standard' ? 'women-only' : 'standard' })}>
+                        <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${passengerState.type === 'women-only' ? 'translate-x-5' : 'translate-x-1'}`}></div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="mt-auto bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.1)] p-6 pb-8 border-t border-slate-100">
+                  {passengerState.status === 'idle' ? (
+                    <>
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center">
+                          <Car size={24} className="text-blue-600 mr-3" />
+                          <div>
+                            <div className="font-bold">Standard Pod</div>
+                            <div className="text-xs text-slate-500">Fastest Route (Dijkstra Computed)</div>
+                          </div>
+                        </div>
+                        <div className="font-bold text-lg">₹65</div>
+                      </div>
+                      <button
+                        onClick={handleBookRide}
+                        className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-slate-800 transition-transform active:scale-95 flex items-center justify-center"
+                      >
+                        Request Ride
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-center py-2">
+                      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-50 mb-4">
+                        {passengerState.status === 'waiting' && <RefreshCw size={24} className="text-blue-600 animate-spin" />}
+                        {passengerState.status === 'en_route' && <MapPin size={24} className="text-emerald-500 animate-bounce" />}
+                        {passengerState.status === 'arrived' && <Zap size={24} className="text-amber-500" />}
+                      </div>
+                      <h3 className="font-bold text-lg mb-1">
+                        {passengerState.status === 'waiting' && 'Pod is on the way'}
+                        {passengerState.status === 'en_route' && 'Heading to Destination'}
+                        {passengerState.status === 'arrived' && 'You have arrived!'}
+                      </h3>
+                      <p className="text-slate-500 text-sm mb-6">
+                        {passengerState.status === 'waiting' && `Pod ${passengerState.assignedPod} routing to ${passengerState.origin}.`}
+                        {passengerState.status === 'en_route' && `Direct route via internal graph.`}
+                        {passengerState.status === 'arrived' && `Thank you for riding.`}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* View 3: Fleet Dashboard */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 ${activeTab === 'operator' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="max-w-6xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-white mb-2">Fleet Orchestration</h2>
+                <p className="text-slate-400">Graph nodes health, live telemetry, and rebalancing AI.</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-6 mb-8">
+                <KpiCard title="Active Pods" value={pods.filter(p => p.state && p.state !== 'idle_empty').length} total={`/ ${pods.length}`} icon={<Car size={20} className="text-blue-400" />} />
+                <KpiCard title="Network Nodes" value={Object.keys(NODES).length} total="nodes" icon={<Map size={20} className="text-purple-400" />} subtitle={`${EDGES.length} valid routing edges`} />
+                <KpiCard title="Total Served" value={simCore.current?.getResults()?.totalServedGroups || 0} total="groups" icon={<RefreshCw size={20} className="text-emerald-400" />} trend="Completed trips" />
+                <KpiCard title="Mean Wait" value={`${simCore.current?.getResults()?.overallMeanWaitSec || 0}s`} total="avg" icon={<Shield size={20} className="text-amber-400" />} />
+              </div>
+
+              <div className="grid grid-cols-3 gap-6">
+                <div className="col-span-2 bg-slate-800 rounded-2xl border border-slate-700 p-6">
+                  <div className="flex justify-between items-center mb-6">
+                    <div>
+                      <h3 className="font-bold text-lg text-white">Demand Heatmap & RV-Graph</h3>
+                      <p className="text-xs text-slate-400 mt-1">Request-Vehicle Shareability Analysis</p>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded font-medium ${rebalanceActive ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                      {rebalanceActive ? 'AI: Rebalancing' : 'Optimal Distribution'}
+                    </span>
+                  </div>
+
+                  {/* Demand Heatmap */}
+                  <div className="mb-6">
+                    <span className="text-xs text-slate-400 uppercase font-bold">Live Demand by Station</span>
+                    <div className="grid grid-cols-4 gap-2 mt-3">
+                      {Object.entries(demandHeatmap).slice(0, 8).map(([station, demand]) => (
+                        <div key={station} className="bg-slate-900/50 rounded-lg p-2 border border-slate-700/50">
+                          <div className="text-xs font-bold text-slate-200 truncate">{station}</div>
+                          <div className="flex items-center mt-1">
+                            <div className="flex-1 bg-slate-700 rounded h-1.5 mr-2 overflow-hidden">
+                              <div className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full" style={{ width: `${Math.min(demand * 10, 100)}%` }}></div>
+                            </div>
+                            <span className="text-xs font-mono text-cyan-400">{demand}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* RV-Graph Metrics */}
+                  {rvGraph && (
+                    <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+                      <div className="grid grid-cols-4 gap-2">
+                        <div>
+                          <div className="text-xs text-slate-400 uppercase">Possible Matches</div>
+                          <div className="text-xl font-bold text-slate-200">{rvGraph.metrics.possibleMatches}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-400 uppercase">Shareable</div>
+                          <div className="text-xl font-bold text-emerald-400">{rvGraph.metrics.shareable}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-400 uppercase">Non-Shareable</div>
+                          <div className="text-xl font-bold text-amber-400">{rvGraph.metrics.nonShareable}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-400 uppercase">Shareability %</div>
+                          <div className="text-xl font-bold text-blue-400">
+                            {rvGraph.metrics.possibleMatches > 0
+                              ? Math.round((rvGraph.metrics.shareable / rvGraph.metrics.possibleMatches) * 100)
+                              : 0}%
+                          </div>
+                        </div>
+                      </div>
+                      {rvGraph.edges.length > 0 && (
+                        <div className="mt-3 text-xs text-slate-400">
+                          <span className="font-bold">Matched Rides:</span> {rvGraph.edges.map(e => `${e.vehicle}(${e.overlap}hop)`).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 flex flex-col">
+                  <h3 className="font-bold text-lg text-white mb-4">Pod Telemetry</h3>
+                  <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+                    {pods.map(pod => (
+                      <div key={pod.id} className="bg-slate-900/50 p-3 rounded-lg border border-slate-700/50 flex justify-between items-center">
+                        <div className="flex items-center">
+                          <div className={`w-2 h-2 rounded-full mr-3 ${pod.state === 'repositioning' ? 'bg-amber-400' : pod.state === 'waiting_slot' ? 'bg-red-500' : pod.state === 'idle_empty' ? 'bg-blue-400' : 'bg-emerald-500'}`}></div>
+                          <div>
+                            <div className="text-sm font-bold text-slate-200">{pod.id}</div>
+                            <div className="text-[10px] text-slate-400 truncate w-32">
+                              {pod.state === 'moving_loaded' || pod.state === 'repositioning' ? `${pod.node} → ${pod.nextNode}` : `@ ${pod.node}`}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-mono text-slate-300 capitalize">{pod.state.replace('_', ' ')}</div>
+                          <div className="text-[10px] text-slate-500">STATE</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function NavItem({ icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'}`}>
+      <span className={`mr-3 ${active ? 'text-white' : 'text-slate-500'}`}>{icon}</span>
+      <span className="font-medium">{label}</span>
+    </button>
+  );
+}
+
+function KpiCard({ title, value, total, icon, alert, trend, subtitle }) {
+  return (
+    <div className={`bg-slate-800 rounded-2xl border ${alert ? 'border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]' : 'border-slate-700'} p-5 relative overflow-hidden`}>
+      <div className="flex justify-between items-start mb-4">
+        <h4 className="text-slate-400 font-medium text-sm">{title}</h4>
+        <div className="p-2 bg-slate-900 rounded-lg">{icon}</div>
+      </div>
+      <div className="flex items-baseline">
+        <span className="text-3xl font-bold text-white mr-1">{value}</span>
+        <span className="text-slate-500 font-medium">{total}</span>
+      </div>
+      {trend && <div className="mt-2 text-xs text-emerald-400 font-medium">{trend}</div>}
+      {subtitle && <div className="mt-2 text-xs text-slate-400">{subtitle}</div>}
+      {alert && <div className="absolute top-0 right-0 w-2 h-full bg-amber-500"></div>}
+    </div>
+  );
+}

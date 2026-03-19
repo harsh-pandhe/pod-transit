@@ -1,0 +1,57 @@
+# .gcloudignore file for Pod Transit API
+# Files ignored during deployment to Google Cloud
+
+# Dependencies (will be installed fresh)
+node_modules/
+
+# Source control
+.gitignore
+.git/
+.gitlab-ci.yml
+.github/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Development
+.vscode/
+.idea/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+test/
+tests/
+__tests__/
+coverage/
+
+# Documentation
+*.md
+docs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend (not needed for backend)
+*.html
+*.css
+public/
+
+# KMZ files (optional - can be loaded separately)
+*.kmz
+
+# Project files
+.project
+.classpath
+
+# Miscellaneous
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

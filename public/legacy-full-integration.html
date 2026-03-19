@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Transit - Full System Integration</title>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBBk64FvfSg3HCfGFhQxJnD11wojhb1PPk&libraries=visualization,places,geometry"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #0f0f0f; color: #e2e8f0; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
+        
+        .system-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .map-section {
+            background: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #mapContainer {
+            flex: 1;
+            height: 100%;
+            width: 100%;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+
+        .panel {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .panel-title {
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #0ea5e9;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #334155;
+            font-size: 13px;
+        }
+
+        .metric-row:last-child { border-bottom: none; }
+
+        .metric-label { color: #94a3b8; }
+
+        .metric-value { 
+            font-weight: 600;
+            color: #0ea5e9;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .status-active { background: #10b981; }
+        .status-idle { background: #06b6d4; }
+        .status-warning { background: #f59e0b; }
+        .status-error { background: #ef4444; }
+
+        .btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #0ea5e9 0%, #06b6d4 100%);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4); }
+
+        .pod-item {
+            background: rgba(30, 41, 59, 0.5);
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            border-left: 3px solid #0ea5e9;
+        }
+
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .kpi-card {
+            background: rgba(14, 165, 233, 0.1);
+            border: 1px solid #0ea5e9;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .kpi-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: #0ea5e9;
+        }
+
+        .kpi-label {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 3px;
+        }
+
+        .chart-mini {
+            height: 150px;
+            margin-top: 10px;
+        }
+
+        @media (max-width: 1024px) {
+            .system-container {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+
+            .sidebar {
+                max-height: 400px;
+            }
+        }
+
+        .control-bar {
+            display: flex;
+            gap: 10px;
+            padding: 15px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 1px solid #334155;
+            border-radius: 12px 12px 0 0;
+        }
+
+        .control-btn {
+            padding: 8px 14px;
+            background: #334155;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .control-btn:hover {
+            background: #475569;
+            border-color: #64748b;
+        }
+
+        .control-btn.active {
+            background: #0ea5e9;
+            border-color: #0ea5e9;
+            color: white;
+        }
+
+        .alert-box {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid #ef4444;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #fca5a5;
+            margin-bottom: 10px;
+        }
+
+        .alert-box.success {
+            background: rgba(16, 185, 129, 0.1);
+            border-left-color: #10b981;
+            color: #86efac;
+        }
+    </style>
+</head>
+<body>
+    <div class="system-container">
+        <!-- Left: Full-screen Map -->
+        <div class="map-section">
+            <div class="control-bar">
+                <button class="control-btn active" onclick="switchNetwork('Mumbai')">🌆 Mumbai</button>
+                <button class="control-btn" onclick="switchNetwork('Pune')">🏙️ Pune</button>
+                <button class="control-btn" onclick="switchNetwork('Nashik')">🚗 Nashik</button>
+                <button class="control-btn" onclick="startSimulation()" style="margin-left: auto;">▶ START SIM</button>
+                <button class="control-btn" onclick="updateMetrics()">🔄 REFRESH</button>
+            </div>
+            <div id="mapContainer"></div>
+        </div>
+
+        <!-- Right: Control Panels -->
+        <div class="sidebar">
+            <!-- Alerts Panel -->
+            <div class="panel">
+                <div class="panel-title">⚠️ System Alerts</div>
+                <div id="alertsPanel">
+                    <div class="alert-box success">✓ All systems operational</div>
+                </div>
+            </div>
+
+            <!-- Fleet Status Panel -->
+            <div class="panel">
+                <div class="panel-title">🚗 Fleet Status</div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Pods</span>
+                    <span class="metric-value" id="fleetTotal">12</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot status-active"></span>Active</span>
+                    <span class="metric-value" id="fleetActive">8</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot status-idle"></span>Idle</span>
+                    <span class="metric-value" id="fleetIdle">3</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot status-warning"></span>Charging</span>
+                    <span class="metric-value" id="fleetCharging">1</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Battery</span>
+                    <span class="metric-value" id="avgBattery">78%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Utilization</span>
+                    <span class="metric-value" id="utilization">84%</span>
+                </div>
+                <canvas id="batteryChart" class="chart-mini"></canvas>
+            </div>
+
+            <!-- Demand Metrics Panel -->
+            <div class="panel">
+                <div class="panel-title">📊 Demand Metrics</div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Rides (24h)</span>
+                    <span class="metric-value" id="totalRides">247</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Completed</span>
+                    <span class="metric-value" id="completedRides">245</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Cancelled</span>
+                    <span class="metric-value" id="cancelledRides">2</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Wait Time</span>
+                    <span class="metric-value" id="avgWaitTime">3.2 min</span>
+                </div>
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-value" id="completionRate">99.2%</div>
+                        <div class="kpi-label">Completion Rate</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-value" id="rating">4.8</div>
+                        <div class="kpi-label">Avg Rating</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Revenue Panel -->
+            <div class="panel">
+                <div class="panel-title">💰 Revenue (Today)</div>
+                <div class="metric-row">
+                    <span class="metric-label">Daily Revenue</span>
+                    <span class="metric-value" id="dailyRevenue">₹18,240</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Weekly</span>
+                    <span class="metric-value" id="weeklyRevenue">₹104.5K</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Profit Margin</span>
+                    <span class="metric-value" id="profitMargin">32%</span>
+                </div>
+                <canvas id="revenueChart" class="chart-mini"></canvas>
+            </div>
+
+            <!-- Network Health Panel -->
+            <div class="panel">
+                <div class="panel-title">🌐 Network Health</div>
+                <div class="metric-row">
+                    <span class="metric-label">Health Score</span>
+                    <span class="metric-value" id="healthScore">95%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Uptime (24h)</span>
+                    <span class="metric-value" id="uptime">99.9%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Response Time</span>
+                    <span class="metric-value" id="responseTime">120ms</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Active Routes</span>
+                    <span class="metric-value" id="activeRoutes">18</span>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="panel">
+                <div class="panel-title">⚡ Quick Actions</div>
+                <button class="btn" onclick="openMobileApp()">📱 Mobile App</button>
+                <button class="btn" onclick="openDashboard()">📊 Dashboard</button>
+                <button class="btn" onclick="emergencyStop()" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">🛑 Emergency</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Demo data
+        let currentNetwork = 'Mumbai';
+        let isSimulationRunning = false;
+        
+        const networkData = {
+            Mumbai: {
+                center: { lat: 19.0760, lng: 72.8777 },
+                zoom: 12,
+                stations: [
+                    { id: 'S1', name: 'Andheri Depot', lat: 19.1136, lng: 72.8697, type: 'depot', capacity: 50 },
+                    { id: 'S2', name: 'BKC', lat: 19.0176, lng: 72.8479, type: 'stop', capacity: 20 },
+                    { id: 'S3', name: 'Marine Drive', lat: 18.9520, lng: 72.8289, type: 'stop', capacity: 15 },
+                    { id: 'S4', name: 'Dadar', lat: 19.0176, lng: 72.8479, type: 'stop', capacity: 18 },
+                    { id: 'S5', name: 'CST', lat: 18.9676, lng: 72.8194, type: 'charging', capacity: 30 }
+                ],
+                pods: [
+                    { id: 'P-01', lat: 19.1136, lng: 72.8697, status: 'moving' },
+                    { id: 'P-02', lat: 19.0520, lng: 72.8289, status: 'moving' },
+                    { id: 'P-03', lat: 18.9676, lng: 72.8194, status: 'idle' },
+                    { id: 'P-04', lat: 19.0176, lng: 72.8479, status: 'moving' },
+                    { id: 'P-05', lat: 19.0760, lng: 72.8777, status: 'charging' }
+                ]
+            },
+            Pune: {
+                center: { lat: 18.5204, lng: 73.8567 },
+                zoom: 12,
+                stations: [
+                    { id: 'P1', name: 'Hinjewadi Depot', lat: 18.5895, lng: 73.7997, type: 'depot', capacity: 40 },
+                    { id: 'P2', name: 'IT Park', lat: 18.5597, lng: 73.9263, type: 'stop', capacity: 15 },
+                    { id: 'P3', name: 'Downtown', lat: 18.5204, lng: 73.8567, type: 'stop', capacity: 20 }
+                ],
+                pods: [
+                    { id: 'P-06', lat: 18.5895, lng: 73.7997, status: 'moving' },
+                    { id: 'P-07', lat: 18.5597, lng: 73.9263, status: 'idle' }
+                ]
+            },
+            Nashik: {
+                center: { lat: 19.9975, lng: 73.7898 },
+                zoom: 12,
+                stations: [
+                    { id: 'N1', name: 'Nashik Depot', lat: 19.9975, lng: 73.7898, type: 'depot', capacity: 20 },
+                    { id: 'N2', name: 'Old City', lat: 19.9895, lng: 73.7950, type: 'stop', capacity: 10 }
+                ],
+                pods: [
+                    { id: 'P-08', lat: 19.9975, lng: 73.7898, status: 'idle' }
+                ]
+            }
+        };
+
+        // Initialize map (placeholder - requires Google Maps API key)
+        function initMap() {
+            const container = document.getElementById('mapContainer');
+            const network = networkData[currentNetwork];
+            
+            // In production, this would initialize the actual Google Maps
+            container.innerHTML = `
+                <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #2d3748; color: #a0aec0; font-size: 14px;">
+                    📍 Google Maps Integration Ready<br/>
+                    (Requires API Key Configuration)<br/>
+                    <br/>
+                    <small>Network: ${currentNetwork}</small><br/>
+                    <small>Pods: ${networkData[currentNetwork].pods.length}</small>
+                </div>
+            `;
+        }
+
+        function switchNetwork(network) {
+            currentNetwork = network;
+            document.querySelectorAll('.control-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            initMap();
+            updateMetrics();
+        }
+
+        function startSimulation() {
+            isSimulationRunning = !isSimulationRunning;
+            alert(isSimulationRunning ? '▶ Simulation Started' : '⏹ Simulation Stopped');
+            updateMetrics();
+        }
+
+        function updateMetrics() {
+            // Simulate metric updates
+            document.getElementById('fleetActive').textContent = Math.floor(Math.random() * 3) + 6;
+            document.getElementById('utilization').textContent = Math.floor(Math.random() * 20) + 75 + '%';
+            document.getElementById('avgWaitTime').textContent = (Math.random() * 2 + 2.5).toFixed(1) + ' min';
+            document.getElementById('totalRides').textContent = Math.floor(Math.random() * 50) + 230;
+            document.getElementById('dailyRevenue').textContent = '₹' + Math.floor(Math.random() * 5000 + 15000).toLocaleString();
+        }
+
+        function openMobileApp() {
+            window.open('mobile-app.html', 'mobile', 'width=400,height=800');
+        }
+
+        function openDashboard() {
+            window.open('operator-dashboard.html', 'dashboard', 'width=1400,height=900');
+        }
+
+        function emergencyStop() {
+            document.getElementById('alertsPanel').innerHTML = '<div class="alert-box">🛑 EMERGENCY STOP ACTIVATED</div>';
+            setTimeout(() => {
+                document.getElementById('alertsPanel').innerHTML = '<div class="alert-box success">✓ Emergency resolved</div>';
+            }, 2000);
+        }
+
+        // Initialize on load
+        window.addEventListener('load', () => {
+            initMap();
+            
+            // Battery Chart
+            const ctx1 = document.getElementById('batteryChart').getContext('2d');
+            new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: ['Now', '-30m', '-60m'],
+                    datasets: [{
+                        label: 'Battery %',
+                        data: [78, 82, 85],
+                        borderColor: '#0ea5e9',
+                        backgroundColor: 'rgba(14, 165, 233, 0.1)',
+                        borderWidth: 1,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { max: 100 } }
+                }
+            });
+
+            // Revenue Chart
+            const ctx2 = document.getElementById('revenueChart').getContext('2d');
+            new Chart(ctx2, {
+                type: 'bar',
+                data: {
+                    labels: ['6am', '12pm', '6pm', 'Now'],
+                    datasets: [{
+                        label: '₹',
+                        data: [2100, 5600, 8200, 2340],
+                        backgroundColor: '#0ea5e9'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            // Auto-refresh metrics
+            setInterval(updateMetrics, 5000);
+        });
+    </script>
+</body>
+</html>

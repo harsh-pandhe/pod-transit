@@ -1,0 +1,50 @@
+{
+  "name": "pod-transit",
+  "version": "1.0.0",
+  "description": "Pod Transit - Autonomous Pod System with React Frontend and Node Backend",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node src/api/app.js",
+    "both": "concurrently \"npm run server\" \"npm run dev\"",
+    "desktop": "cross-env NODE_ENV=development concurrently \"bun run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "test": "echo 'Tests not configured yet'",
+    "deploy": "gcloud run deploy pod-transit --source . --platform managed --region asia-south1 --allow-unauthenticated"
+  },
+  "keywords": [
+    "pod-transit",
+    "autonomous",
+    "ride-sharing",
+    "google-cloud"
+  ],
+  "author": "Harsh Pandhe",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "firebase-admin": "^12.0.0",
+    "dotenv": "^16.3.1",
+    "helmet": "^7.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.263.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.16",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^41.0.3",
+    "nodemon": "^3.0.2",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.3.6",
+    "vite": "^5.0.0",
+    "wait-on": "^9.0.4"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}

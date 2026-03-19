@@ -1,0 +1,647 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Map, Smartphone, LayoutDashboard, Battery, 
+  AlertTriangle, Users, MapPin, Zap, Shield, 
+  Play, Pause, RefreshCw, CarFront
+} from 'lucide-react';
+
+// --- Graph Network Data (Mumbai Inspired) ---
+const NODES = {
+  'Colaba': { x: 280, y: 440, name: 'Colaba', type: 'station' },
+  'Churchgate': { x: 260, y: 390, name: 'Churchgate', type: 'station' },
+  'CST': { x: 310, y: 380, name: 'CST', type: 'station' },
+  'Worli': { x: 240, y: 330, name: 'Worli', type: 'station' },
+  'Dadar': { x: 290, y: 320, name: 'Dadar', type: 'station' },
+  'Wadala': { x: 340, y: 310, name: 'Wadala Depot', type: 'depot' },
+  'Bandra': { x: 250, y: 260, name: 'Bandra', type: 'station' },
+  'BKC': { x: 300, y: 250, name: 'BKC', type: 'station' },
+  'Kurla': { x: 350, y: 240, name: 'Kurla', type: 'station' },
+  'Chembur': { x: 400, y: 260, name: 'Chembur', type: 'station' },
+  'Andheri': { x: 230, y: 170, name: 'Andheri', type: 'station' },
+  'Powai': { x: 320, y: 160, name: 'Powai', type: 'station' },
+  'Ghatkopar': { x: 380, y: 180, name: 'Ghatkopar', type: 'station' },
+  'Aarey': { x: 280, y: 120, name: 'Aarey Depot', type: 'depot' },
+  'Borivali': { x: 210, y: 60, name: 'Borivali', type: 'station' },
+  'Thane': { x: 420, y: 100, name: 'Thane', type: 'station' },
+  'Vashi': { x: 480, y: 280, name: 'Vashi', type: 'station' },
+  'NMA': { x: 550, y: 320, name: 'Navi Mumbai Airport', type: 'station' },
+};
+
+const EDGES = [
+  ['Colaba', 'Churchgate'], ['Colaba', 'CST'],
+  ['Churchgate', 'Worli'], ['Churchgate', 'Dadar'],
+  ['CST', 'Dadar'], ['CST', 'Wadala'],
+  ['Worli', 'Bandra'], ['Worli', 'Dadar'],
+  ['Dadar', 'Bandra'], ['Dadar', 'Wadala'], ['Dadar', 'BKC'],
+  ['Wadala', 'Kurla'], ['Wadala', 'Chembur'],
+  ['Bandra', 'Andheri'], ['Bandra', 'BKC'],
+  ['BKC', 'Kurla'], ['BKC', 'Powai'],
+  ['Kurla', 'Chembur'], ['Kurla', 'Ghatkopar'],
+  ['Chembur', 'Vashi'],
+  ['Andheri', 'Borivali'], ['Andheri', 'Powai'], ['Andheri', 'Aarey'],
+  ['Powai', 'Ghatkopar'], ['Powai', 'Aarey'],
+  ['Ghatkopar', 'Thane'],
+  ['Aarey', 'Borivali'], ['Aarey', 'Thane'],
+  ['Borivali', 'Thane'],
+  ['Vashi', 'Thane'], ['Vashi', 'NMA']
+];
+
+// Helper: Build adjacency list
+const ADJ_LIST = {};
+Object.keys(NODES).forEach(n => ADJ_LIST[n] = []);
+EDGES.forEach(([a, b]) => {
+  ADJ_LIST[a].push(b);
+  ADJ_LIST[b].push(a);
+});
+
+// Helper: BFS for shortest path
+function getShortestPath(start, end) {
+  if (start === end) return [];
+  let queue = [[start]];
+  let visited = new Set([start]);
+  
+  while (queue.length > 0) {
+    let path = queue.shift();
+    let node = path[path.length - 1];
+    
+    if (node === end) return path.slice(1); // Exclude starting node
+    
+    for (let neighbor of ADJ_LIST[node]) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push([...path, neighbor]);
+      }
+    }
+  }
+  return [];
+}
+
+const INITIAL_PODS = [
+  { id: 'P01', currentNode: 'Bandra', nextNode: 'Andheri', path: [], progress: 0.5, status: 'idle', battery: 85, type: 'standard' },
+  { id: 'P02', currentNode: 'CST', nextNode: 'Dadar', path: ['Wadala', 'Kurla', 'Chembur'], progress: 0.2, status: 'moving', battery: 92, type: 'standard' },
+  { id: 'P03', currentNode: 'Thane', nextNode: 'Ghatkopar', path: ['Powai', 'Andheri'], progress: 0.8, status: 'moving', battery: 78, type: 'standard' },
+  { id: 'P04', currentNode: 'Borivali', nextNode: 'Aarey', path: [], progress: 0.1, status: 'moving', battery: 15, type: 'standard' }, // Heading to charge
+  { id: 'P05', currentNode: 'Colaba', nextNode: 'Churchgate', path: [], progress: 0.9, status: 'idle', battery: 100, type: 'women-only' },
+  { id: 'P06', currentNode: 'Vashi', nextNode: 'Chembur', path: ['Kurla', 'BKC'], progress: 0.5, status: 'moving', battery: 60, type: 'standard' },
+  { id: 'P07', currentNode: 'Powai', nextNode: 'BKC', path: ['Bandra', 'Worli'], progress: 0.1, status: 'moving', battery: 88, type: 'standard' },
+  { id: 'P08', currentNode: 'Wadala', nextNode: 'Wadala', path: [], progress: 0, status: 'charging', battery: 40, type: 'standard' },
+];
+
+export default function PodTransitPrototype() {
+  const [activeTab, setActiveTab] = useState('simulation');
+  const [simRunning, setSimRunning] = useState(true);
+  const [pods, setPods] = useState(INITIAL_PODS);
+  const [obstacle, setObstacle] = useState(null); // e.g., { edge: ['Bandra', 'Andheri'] }
+  const [passengerState, setPassengerState] = useState({ origin: 'Andheri', destination: 'BKC', type: 'standard', status: 'idle', assignedPod: null });
+  const [notifications, setNotifications] = useState([]);
+
+  const addNotification = (msg) => {
+    // Add Math.random() to prevent duplicate keys if multiple notifications are triggered in the same ms tick
+    setNotifications(prev => [{ id: Date.now() + Math.random(), time: new Date().toLocaleTimeString(), msg }, ...prev].slice(0, 5));
+  };
+
+  // --- Simulation Loop ---
+  useEffect(() => {
+    if (!simRunning) return;
+
+    const interval = setInterval(() => {
+      setPods(currentPods => currentPods.map(pod => {
+        let newPod = { ...pod };
+
+        // 1. Battery Management
+        if (newPod.status === 'moving' || newPod.status === 'carrying' || newPod.status === 'idle') {
+          newPod.battery -= 0.05;
+          if (newPod.battery <= 20 && newPod.status !== 'carrying' && newPod.path[newPod.path.length-1] !== 'Wadala' && newPod.path[newPod.path.length-1] !== 'Aarey') {
+            // Reroute to nearest depot
+            const pathWadala = getShortestPath(newPod.nextNode || newPod.currentNode, 'Wadala');
+            const pathAarey = getShortestPath(newPod.nextNode || newPod.currentNode, 'Aarey');
+            newPod.path = pathWadala.length < pathAarey.length ? pathWadala : pathAarey;
+            newPod.status = 'moving';
+            addNotification(`Pod ${pod.id} routing to depot (Low Battery).`);
+          }
+        }
+        if (newPod.battery <= 0) newPod.battery = 0;
+
+        // 2. Movement & Graph Traversal Logic
+        if (newPod.status !== 'charging' && newPod.status !== 'boarding' && newPod.status !== 'halted') {
+          
+          // Check Obstacle on current edge
+          if (obstacle && 
+             ((newPod.currentNode === obstacle.edge[0] && newPod.nextNode === obstacle.edge[1]) || 
+              (newPod.currentNode === obstacle.edge[1] && newPod.nextNode === obstacle.edge[0]))) {
+             
+             // Stop before the obstacle (middle of edge)
+             if (newPod.progress < 0.4) {
+               newPod.progress += 0.02; // slow down
+             } else {
+               newPod.status = 'halted';
+               if(Math.random() > 0.95) addNotification(`Alert: Pod ${pod.id} halted by debris on ${obstacle.edge[0]}-${obstacle.edge[1]} line!`);
+             }
+             return newPod;
+          }
+
+          // Idle wandering logic to keep map alive
+          if (newPod.status === 'idle' && newPod.path.length === 0) {
+             const neighbors = ADJ_LIST[newPod.nextNode || newPod.currentNode];
+             newPod.path = [neighbors[Math.floor(Math.random() * neighbors.length)]];
+          }
+
+          if (newPod.nextNode) {
+            const n1 = NODES[newPod.currentNode];
+            const n2 = NODES[newPod.nextNode];
+            const distance = Math.hypot(n2.x - n1.x, n2.y - n1.y);
+            
+            // Speed factor
+            let speed = 2.5;
+            newPod.progress += speed / distance;
+
+            if (newPod.progress >= 1.0) {
+              // Reached nextNode
+              newPod.currentNode = newPod.nextNode;
+              newPod.progress = 0;
+
+              if (newPod.path.length > 0) {
+                newPod.nextNode = newPod.path.shift();
+              } else {
+                newPod.nextNode = newPod.currentNode; // Stay put for a tick
+                
+                // Destination Logic
+                const nodeType = NODES[newPod.currentNode].type;
+                if (nodeType === 'depot' && newPod.battery < 99 && newPod.status !== 'carrying') {
+                  newPod.status = 'charging';
+                } else if (newPod.status === 'moving' && passengerState.status === 'waiting' && newPod.id === passengerState.assignedPod) {
+                  // Arrived at passenger
+                  newPod.status = 'boarding';
+                  setTimeout(() => {
+                    setPassengerState(prev => ({ ...prev, status: 'en_route' }));
+                    setPods(p => p.map(x => x.id === newPod.id ? { 
+                      ...x, 
+                      status: 'carrying', 
+                      path: getShortestPath(newPod.currentNode, passengerState.destination) 
+                    } : x));
+                    addNotification(`Passenger boarded Pod ${newPod.id} at ${newPod.currentNode}.`);
+                  }, 2000);
+                } else if (newPod.status === 'carrying') {
+                  // Dropped off passenger
+                  newPod.status = 'idle';
+                  setPassengerState(prev => ({ ...prev, status: 'arrived' }));
+                  addNotification(`Pod ${newPod.id} dropped passenger at ${newPod.currentNode}.`);
+                  setTimeout(() => setPassengerState(prev => ({ ...prev, status: 'idle', assignedPod: null })), 4000);
+                } else {
+                  newPod.status = 'idle';
+                }
+              }
+            }
+          } else if (newPod.path.length > 0) {
+            newPod.nextNode = newPod.path.shift();
+            newPod.progress = 0;
+          }
+        }
+
+        // 3. Un-Halt if obstacle cleared
+        if (newPod.status === 'halted' && !obstacle) {
+           newPod.status = newPod.path.length > 0 ? 'moving' : 'idle';
+        }
+
+        // 4. Charging
+        if (newPod.status === 'charging') {
+          newPod.battery += 1.0;
+          if (newPod.battery >= 100) {
+            newPod.battery = 100;
+            newPod.status = 'idle';
+            addNotification(`Pod ${pod.id} fully charged at ${pod.currentNode}.`);
+          }
+        }
+
+        return newPod;
+      }));
+    }, 50); // Faster tick rate for smoother 2D interpolation
+
+    return () => clearInterval(interval);
+  }, [simRunning, obstacle, passengerState]);
+
+  // --- Handlers ---
+  const handleBookRide = () => {
+    // Find nearest suitable pod
+    const suitablePods = pods.filter(p => 
+      p.status === 'idle' && 
+      p.battery > 30 && 
+      (passengerState.type === 'standard' || p.type === passengerState.type)
+    );
+
+    if (suitablePods.length === 0) {
+      addNotification("No suitable pods available currently. Please wait.");
+      return;
+    }
+
+    // Heuristic: pick pod with shortest path to passenger origin
+    let bestPod = null;
+    let shortestDist = Infinity;
+    let bestPath = [];
+
+    suitablePods.forEach(p => {
+       const path = getShortestPath(p.nextNode || p.currentNode, passengerState.origin);
+       if (path.length < shortestDist) {
+         shortestDist = path.length;
+         bestPod = p;
+         bestPath = path;
+       }
+    });
+    
+    setPassengerState(prev => ({ ...prev, status: 'waiting', assignedPod: bestPod.id }));
+    addNotification(`Ride booked! Pod ${bestPod.id} navigating to ${passengerState.origin}.`);
+
+    // Dispatch pod
+    setPods(current => current.map(p => 
+      p.id === bestPod.id ? { 
+        ...p, 
+        status: 'moving', 
+        path: bestPath,
+        nextNode: bestPath.length > 0 ? bestPath.shift() : p.nextNode
+      } : p
+    ));
+  };
+
+  const triggerObstacle = () => {
+    if (obstacle) {
+      setObstacle(null);
+      addNotification("Network cleared. Pods resuming normal operation.");
+    } else {
+      // Pick a random critical edge (e.g., Bandra-BKC)
+      setObstacle({ edge: ['Bandra', 'BKC'] }); 
+      addNotification("CRITICAL: Debris detected between Bandra and BKC!");
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
+      {/* Header */}
+      <header className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center z-10 shadow-md">
+        <div className="flex items-center space-x-3">
+          <div className="bg-blue-600 p-2 rounded-lg">
+            <Zap size={24} className="text-white" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-white">Mumbai Pod Network</h1>
+          <span className="ml-4 px-3 py-1 bg-slate-700 rounded-full text-xs font-medium text-slate-300 border border-slate-600">
+            Graph Routing v2
+          </span>
+        </div>
+        <div className="flex space-x-2">
+          <button 
+            onClick={() => setSimRunning(!simRunning)}
+            className={`flex items-center px-4 py-2 rounded-md font-medium transition-colors ${simRunning ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'}`}
+          >
+            {simRunning ? <><Pause size={18} className="mr-2"/> Pause Sim</> : <><Play size={18} className="mr-2"/> Resume Sim</>}
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar Navigation */}
+        <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col">
+          <nav className="flex-1 p-4 space-y-2">
+            <NavItem icon={<Map size={20}/>} label="Network Map" active={activeTab === 'simulation'} onClick={() => setActiveTab('simulation')} />
+            <NavItem icon={<Smartphone size={20}/>} label="Passenger App" active={activeTab === 'passenger'} onClick={() => setActiveTab('passenger')} />
+            <NavItem icon={<LayoutDashboard size={20}/>} label="Fleet Dashboard" active={activeTab === 'operator'} onClick={() => setActiveTab('operator')} />
+          </nav>
+
+          {/* Live Event Feed */}
+          <div className="p-4 border-t border-slate-700 bg-slate-800/50">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Live Network Events</h3>
+            <div className="space-y-3">
+              {notifications.map(n => (
+                <div key={n.id} className="text-sm text-slate-300 animate-fade-in flex items-start leading-tight">
+                  <span className="text-slate-500 text-xs mr-2 mt-0.5 whitespace-nowrap">{n.time}</span>
+                  <span className={n.msg.includes('Alert') || n.msg.includes('CRITICAL') ? 'text-red-400' : ''}>{n.msg}</span>
+                </div>
+              ))}
+              {notifications.length === 0 && <div className="text-sm text-slate-500 italic">No recent events...</div>}
+            </div>
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        <main className="flex-1 relative bg-slate-900 overflow-y-auto">
+          
+          {/* View 1: Digital Twin Simulation (Network Mess) */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 ${activeTab === 'simulation' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="max-w-6xl mx-auto h-full flex flex-col">
+              <div className="flex justify-between items-end mb-4 shrink-0">
+                <div>
+                  <h2 className="text-3xl font-bold text-white mb-2">Network Topology</h2>
+                  <p className="text-slate-400">Live BFS routing algorithm navigating a complex node-based transit web.</p>
+                </div>
+                <button 
+                  onClick={triggerObstacle}
+                  className={`flex items-center px-4 py-2 rounded-lg font-medium transition-colors ${obstacle ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-amber-500/20 text-amber-400 border border-amber-500/50 hover:bg-amber-500/30'}`}
+                >
+                  <AlertTriangle size={18} className="mr-2"/>
+                  {obstacle ? 'Clear Track Debris' : 'Trigger Obstacle Event'}
+                </button>
+              </div>
+
+              <div className="bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden relative flex-1 min-h-[500px]">
+                <svg width="100%" height="100%" viewBox="0 0 800 500" className="bg-[#0f172a] w-full h-full">
+                  {/* Grid Background */}
+                  <defs>
+                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
+                    </pattern>
+                    <filter id="glow">
+                      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                      <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#grid)" />
+
+                  {/* Draw Edges */}
+                  {EDGES.map((edge, i) => {
+                    const n1 = NODES[edge[0]];
+                    const n2 = NODES[edge[1]];
+                    const isObstacle = obstacle && ((edge[0]===obstacle.edge[0] && edge[1]===obstacle.edge[1]) || (edge[0]===obstacle.edge[1] && edge[1]===obstacle.edge[0]));
+                    return (
+                      <g key={i}>
+                        <line x1={n1.x} y1={n1.y} x2={n2.x} y2={n2.y} stroke={isObstacle ? "#ef4444" : "#334155"} strokeWidth="4" />
+                        <line x1={n1.x} y1={n1.y} x2={n2.x} y2={n2.y} stroke={isObstacle ? "#f87171" : "#475569"} strokeWidth="1" strokeDasharray="4 4" />
+                        {isObstacle && (
+                          <circle cx={(n1.x+n2.x)/2} cy={(n1.y+n2.y)/2} r="8" fill="rgba(239,68,68,0.5)" className="animate-ping" />
+                        )}
+                      </g>
+                    )
+                  })}
+
+                  {/* Draw Nodes */}
+                  {Object.values(NODES).map(node => (
+                    <g key={node.name} transform={`translate(${node.x}, ${node.y})`}>
+                      <circle r={node.type === 'depot' ? "10" : "6"} fill="#1e293b" stroke={node.type === 'depot' ? "#f59e0b" : "#3b82f6"} strokeWidth="3" />
+                      <text x="12" y="4" fill={node.type === 'depot' ? '#fcd34d' : '#cbd5e1'} fontSize="11" fontWeight="500" style={{userSelect:'none'}}>
+                        {node.name}
+                      </text>
+                    </g>
+                  ))}
+
+                  {/* Draw Pods */}
+                  {pods.map(pod => {
+                    const n1 = NODES[pod.currentNode];
+                    const n2 = NODES[pod.nextNode] || n1;
+                    
+                    // Interpolate position based on graph edge
+                    const x = n1.x + (n2.x - n1.x) * pod.progress;
+                    const y = n1.y + (n2.y - n1.y) * pod.progress;
+
+                    // Calculate rotation to face direction of travel
+                    let angle = 0;
+                    if (n1 !== n2) {
+                       angle = Math.atan2(n2.y - n1.y, n2.x - n1.x) * 180 / Math.PI;
+                    }
+
+                    // Determine Color
+                    let color = '#3b82f6'; // Idle
+                    if (pod.status === 'moving' || pod.status === 'carrying') color = '#10b981'; 
+                    if (pod.status === 'halted') color = '#ef4444'; 
+                    if (pod.battery < 20) color = '#f59e0b'; 
+                    if (pod.type === 'women-only') color = '#ec4899'; 
+
+                    return (
+                      <g key={pod.id} transform={`translate(${x}, ${y}) rotate(${angle})`} style={{ transition: 'transform 0.05s linear' }}>
+                        {(pod.status === 'moving' || pod.status === 'carrying') && (
+                          <circle r="14" fill={color} opacity="0.2" filter="url(#glow)" />
+                        )}
+                        <rect x="-10" y="-6" width="20" height="12" rx="3" fill="#0f172a" stroke={color} strokeWidth="2" />
+                        <circle cx="-4" cy="0" r="1.5" fill={pod.status === 'carrying' ? '#fff' : '#475569'} />
+                        <circle cx="4" cy="0" r="1.5" fill={pod.status === 'carrying' && passengerState.status === 'en_route' ? '#fff' : '#475569'} />
+                        {pod.status === 'charging' && <path d="M -2 -4 L 2 -4 L 0 4 Z" fill="#facc15" transform="rotate(-90)" />}
+                        
+                        {/* ID tag always stays upright */}
+                        <text transform={`rotate(${-angle})`} x="0" y="-12" fill="#94a3b8" fontSize="9" textAnchor="middle" fontWeight="bold">{pod.id}</text>
+                      </g>
+                    )
+                  })}
+                </svg>
+
+                {/* Legend Overlay */}
+                <div className="absolute bottom-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-700 p-3 rounded-lg text-xs space-y-2 shadow-xl">
+                  <div className="font-bold text-slate-300 border-b border-slate-700 pb-1 mb-2">Network Status</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-[#3b82f6] bg-slate-800 mr-2"></div> Node / Idle Pod</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-[#10b981] bg-slate-800 mr-2"></div> En Route Pod</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-[#f59e0b] bg-slate-800 mr-2"></div> Charging Depot</div>
+                  <div className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-[#ef4444] bg-slate-800 mr-2"></div> Track Debris / Halted</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* View 2: Passenger App Mockup */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 flex justify-center items-center ${activeTab === 'passenger' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="w-[380px] h-[700px] bg-white rounded-[40px] border-[8px] border-slate-800 overflow-hidden relative shadow-2xl flex flex-col font-sans text-slate-800">
+              <div className="bg-white px-6 pt-3 pb-2 flex justify-between items-center text-xs font-semibold z-20">
+                <span>9:41</span>
+                <div className="flex space-x-1"><Battery size={14} /></div>
+              </div>
+
+              {/* Map Mockup */}
+              <div className="absolute inset-0 bg-[#e2e8f0] z-0 opacity-50 flex items-center justify-center overflow-hidden">
+                 <svg width="200%" height="200%" style={{opacity: 0.3}}>
+                    {EDGES.map((edge, i) => (
+                      <line key={i} x1={NODES[edge[0]].x} y1={NODES[edge[0]].y} x2={NODES[edge[1]].x} y2={NODES[edge[1]].y} stroke="#64748b" strokeWidth="3" />
+                    ))}
+                 </svg>
+              </div>
+
+              <div className="flex-1 z-10 flex flex-col relative">
+                <div className="p-6">
+                  <h1 className="text-2xl font-bold mb-1">Where to?</h1>
+                  <p className="text-slate-500 text-sm mb-6">Point-to-point via the Graph Network.</p>
+
+                  <div className="bg-white rounded-2xl shadow-lg p-4 space-y-4 mb-6">
+                    <div className="relative">
+                      <div className="absolute left-3 top-3.5 w-2 h-2 rounded-full bg-blue-500"></div>
+                      <div className="absolute left-3.5 top-6 w-0.5 h-6 bg-slate-200"></div>
+                      <select 
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={passengerState.origin}
+                        onChange={(e) => setPassengerState({...passengerState, origin: e.target.value})}
+                        disabled={passengerState.status !== 'idle'}
+                      >
+                        {Object.values(NODES).filter(s => s.type === 'station').map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+                    
+                    <div className="relative">
+                      <div className="absolute left-3 top-3.5 w-2 h-2 rounded-none bg-emerald-500"></div>
+                      <select 
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl appearance-none text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={passengerState.destination}
+                        onChange={(e) => setPassengerState({...passengerState, destination: e.target.value})}
+                        disabled={passengerState.status !== 'idle'}
+                      >
+                        {Object.values(NODES).filter(s => s.type === 'station').map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl shadow-lg p-4 mb-6">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Preferences</h3>
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center text-sm font-medium">
+                        <Shield size={16} className="text-pink-500 mr-2" />
+                        Women-Only Pod
+                      </div>
+                      <div className={`w-10 h-6 rounded-full transition-colors ${passengerState.type === 'women-only' ? 'bg-pink-500' : 'bg-slate-200'} relative`}
+                           onClick={() => passengerState.status === 'idle' && setPassengerState({...passengerState, type: passengerState.type === 'standard' ? 'women-only' : 'standard'})}>
+                        <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${passengerState.type === 'women-only' ? 'translate-x-5' : 'translate-x-1'}`}></div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="mt-auto bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.1)] p-6 pb-8 border-t border-slate-100">
+                  {passengerState.status === 'idle' ? (
+                    <>
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center">
+                          <CarFront size={24} className="text-blue-600 mr-3" />
+                          <div>
+                            <div className="font-bold">Standard Pod</div>
+                            <div className="text-xs text-slate-500">Fastest Route (BFS Computed)</div>
+                          </div>
+                        </div>
+                        <div className="font-bold text-lg">₹65</div>
+                      </div>
+                      <button 
+                        onClick={handleBookRide}
+                        className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-slate-800 transition-transform active:scale-95 flex items-center justify-center"
+                      >
+                        Request Ride
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-center py-2">
+                      <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-50 mb-4">
+                        {passengerState.status === 'waiting' && <RefreshCw size={24} className="text-blue-600 animate-spin" />}
+                        {passengerState.status === 'en_route' && <MapPin size={24} className="text-emerald-500 animate-bounce" />}
+                        {passengerState.status === 'arrived' && <Zap size={24} className="text-amber-500" />}
+                      </div>
+                      <h3 className="font-bold text-lg mb-1">
+                        {passengerState.status === 'waiting' && 'Pod is on the way'}
+                        {passengerState.status === 'en_route' && 'Heading to Destination'}
+                        {passengerState.status === 'arrived' && 'You have arrived!'}
+                      </h3>
+                      <p className="text-slate-500 text-sm mb-6">
+                        {passengerState.status === 'waiting' && `Pod ${passengerState.assignedPod} routing to ${passengerState.origin}.`}
+                        {passengerState.status === 'en_route' && `Direct route via internal graph.`}
+                        {passengerState.status === 'arrived' && `Thank you for riding.`}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* View 3: Fleet Dashboard */}
+          <div className={`p-8 absolute inset-0 transition-opacity duration-300 ${activeTab === 'operator' ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'}`}>
+            <div className="max-w-6xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-white mb-2">Fleet Orchestration</h2>
+                <p className="text-slate-400">Graph nodes health, live telemetry, and rebalancing AI.</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-6 mb-8">
+                <KpiCard title="Active Pods" value={pods.filter(p => p.status !== 'charging').length} total={`/ ${pods.length}`} icon={<CarFront size={20} className="text-blue-400"/>} />
+                <KpiCard title="Network Nodes" value={Object.keys(NODES).length} total="nodes" icon={<Map size={20} className="text-purple-400"/>} subtitle={`${EDGES.length} valid routing edges`} />
+                <KpiCard title="BFS Re-routes" value="14" total="/hr" icon={<RefreshCw size={20} className="text-emerald-400"/>} trend="Dynamic pathing active" />
+                <KpiCard title="Fleet Battery" value={Math.round(pods.reduce((acc, p) => acc + p.battery, 0) / pods.length)} total="%" icon={<Battery size={20} className="text-amber-400"/>} alert={pods.some(p => p.battery < 20)} />
+              </div>
+
+              <div className="grid grid-cols-3 gap-6">
+                <div className="col-span-2 bg-slate-800 rounded-2xl border border-slate-700 p-6">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="font-bold text-lg text-white">AI Demand Prediction (Top Hubs)</h3>
+                    <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded font-medium">Model: Active</span>
+                  </div>
+                  <div className="h-64 flex items-end justify-between space-x-4">
+                    {[
+                      { s: 'Andheri', d: 85, cur: 20 },
+                      { s: 'BKC', d: 40, cur: 45 },
+                      { s: 'Dadar', d: 95, cur: 30 },
+                      { s: 'Thane', d: 65, cur: 50 },
+                    ].map((stat, i) => (
+                      <div key={i} className="flex-1 flex flex-col items-center group">
+                        <div className="w-full relative h-48 bg-slate-900 rounded-t-lg flex items-end p-2 border-b border-slate-700">
+                          <div className="w-1/2 bg-blue-500/20 border border-blue-500/50 rounded-t mr-1 relative" style={{height: `${stat.d}%`}}>
+                             <div className="absolute -top-6 w-full text-center text-xs text-blue-400 opacity-0 group-hover:opacity-100">Pred</div>
+                          </div>
+                          <div className="w-1/2 bg-emerald-500/50 border border-emerald-500 rounded-t relative" style={{height: `${stat.cur}%`}}>
+                             <div className="absolute -top-6 w-full text-center text-xs text-emerald-400 opacity-0 group-hover:opacity-100">Pods</div>
+                          </div>
+                        </div>
+                        <span className="mt-3 text-sm font-medium text-slate-300">{stat.s}</span>
+                        {stat.d > stat.cur + 40 && (
+                          <span className="mt-1 text-[10px] text-amber-400 flex items-center"><RefreshCw size={10} className="mr-1 animate-spin"/> Dispatching Empties</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 flex flex-col">
+                  <h3 className="font-bold text-lg text-white mb-4">Pod Telemetry</h3>
+                  <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                    {pods.map(pod => (
+                      <div key={pod.id} className="bg-slate-900/50 p-3 rounded-lg border border-slate-700/50 flex justify-between items-center">
+                        <div className="flex items-center">
+                          <div className={`w-2 h-2 rounded-full mr-3 ${pod.status === 'charging' ? 'bg-amber-400' : pod.status === 'halted' ? 'bg-red-500' : pod.status === 'idle' ? 'bg-blue-400' : 'bg-emerald-500'}`}></div>
+                          <div>
+                            <div className="text-sm font-bold text-slate-200">{pod.id}</div>
+                            <div className="text-[10px] text-slate-400 truncate w-24">
+                              {pod.status === 'moving' || pod.status === 'carrying' ? `${pod.currentNode} → ${pod.nextNode}` : `@ ${pod.currentNode}`}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`text-sm font-mono ${pod.battery < 25 ? 'text-amber-400' : 'text-slate-300'}`}>{Math.floor(pod.battery)}%</div>
+                          <div className="text-[10px] text-slate-500">BATTERY</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function NavItem({ icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'}`}>
+      <span className={`mr-3 ${active ? 'text-white' : 'text-slate-500'}`}>{icon}</span>
+      <span className="font-medium">{label}</span>
+    </button>
+  );
+}
+
+function KpiCard({ title, value, total, icon, alert, trend, subtitle }) {
+  return (
+    <div className={`bg-slate-800 rounded-2xl border ${alert ? 'border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]' : 'border-slate-700'} p-5 relative overflow-hidden`}>
+      <div className="flex justify-between items-start mb-4">
+        <h4 className="text-slate-400 font-medium text-sm">{title}</h4>
+        <div className="p-2 bg-slate-900 rounded-lg">{icon}</div>
+      </div>
+      <div className="flex items-baseline">
+        <span className="text-3xl font-bold text-white mr-1">{value}</span>
+        <span className="text-slate-500 font-medium">{total}</span>
+      </div>
+      {trend && <div className="mt-2 text-xs text-emerald-400 font-medium">{trend}</div>}
+      {subtitle && <div className="mt-2 text-xs text-slate-400">{subtitle}</div>}
+      {alert && <div className="absolute top-0 right-0 w-2 h-full bg-amber-500"></div>}
+    </div>
+  );
+}

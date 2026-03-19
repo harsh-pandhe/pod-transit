@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Intelligence System - Main Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
+        body { font-family: 'Outfit', sans-serif; }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(102, 126, 234, 0.2);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-slate-900/50 backdrop-blur border-b border-slate-700 px-6 py-4">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M8 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM15 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                        <path d="M3 4a1 1 0 00-1 1v10a1 1 0 001 1h1.05a2.5 2.5 0 014.9 0H10a1 1 0 001-1V5a1 1 0 00-1-1H3z"></path>
+                    </svg>
+                </div>
+                <h1 class="text-2xl font-bold gradient-text">Pod Intelligence System</h1>
+            </div>
+            <div class="text-sm text-slate-400">v2.0 • Production Ready</div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-6 py-12">
+        <!-- Hero Section -->
+        <div class="text-center mb-16">
+            <h2 class="text-4xl md:text-5xl font-bold mb-4">
+                <span class="gradient-text">Autonomous Pod Transit</span>
+                <br>with Intelligent Orchestration
+            </h2>
+            <p class="text-lg text-slate-400 max-w-2xl mx-auto">
+                A complete three-layer distributed AI system featuring a central brain orchestrating pod fleets and individual pod brains making autonomous decisions across 6 metropolitan networks.
+            </p>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-12">
+            <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-cyan-400">3</div>
+                <div class="text-sm text-slate-400">AI Layers</div>
+            </div>
+            <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-purple-400">6</div>
+                <div class="text-sm text-slate-400">Networks</div>
+            </div>
+            <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-emerald-400">8+</div>
+                <div class="text-sm text-slate-400">Pods</div>
+            </div>
+            <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-blue-400">42</div>
+                <div class="text-sm text-slate-400">KB Code</div>
+            </div>
+            <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-amber-400">3000+</div>
+                <div class="text-sm text-slate-400">Ticks/sec</div>
+            </div>
+        </div>
+
+        <!-- Main Card Grid -->
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+            <!-- Interactive Simulation -->
+            <a href="intelligent-simulation.html" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-purple-500 transition-colors">
+                    <div class="w-12 h-12 bg-purple-600/20 border border-purple-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-purple-600/30 transition">
+                        <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Interactive Simulation</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        Real-time visualization of the AI system in action. Watch pods navigate networks, respond to obstacles, and optimize delivery.
+                    </p>
+                    <div class="text-sm text-purple-400 font-medium">Launch Simulation →</div>
+                </div>
+            </a>
+
+            <!-- Architecture Docs -->
+            <a href="SYSTEM_ARCHITECTURE.md" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-blue-500 transition-colors">
+                    <div class="w-12 h-12 bg-blue-600/20 border border-blue-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-blue-600/30 transition">
+                        <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">System Architecture</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        Deep dive into the three-layer intelligent system: Central Brain, Pod Brains, and Network Models.
+                    </p>
+                    <div class="text-sm text-blue-400 font-medium">Read Documentation →</div>
+                </div>
+            </a>
+
+            <!-- Quick Start -->
+            <a href="QUICK_START.md" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-emerald-500 transition-colors">
+                    <div class="w-12 h-12 bg-emerald-600/20 border border-emerald-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-emerald-600/30 transition">
+                        <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Quick Start</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        Get up and running in 2 minutes. Learn key features, configuration options, and customization patterns.
+                    </p>
+                    <div class="text-sm text-emerald-400 font-medium">Quick Setup →</div>
+                </div>
+            </a>
+
+            <!-- Code Examples -->
+            <a href="examples.js" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-orange-500 transition-colors">
+                    <div class="w-12 h-12 bg-orange-600/20 border border-orange-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-orange-600/30 transition">
+                        <svg class="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4m0 0l1 14M5 7l5 5m0 0l1 14"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Code Examples</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        12 practical examples showing demand spikes, obstacle handling, battery management, and performance benchmarks.
+                    </p>
+                    <div class="text-sm text-orange-400 font-medium">View Examples →</div>
+                </div>
+            </a>
+
+            <!-- Original Simulation -->
+            <a href="index.html" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-pink-500 transition-colors">
+                    <div class="w-12 h-12 bg-pink-600/20 border border-pink-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-pink-600/30 transition">
+                        <svg class="w-6 h-6 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 0m0 0l3 0m-3 0v4m0-11v.01"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Original Simulation</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        Legacy React-based simulation with BFS routing, obstacle handling, and passenger app mockup.
+                    </p>
+                    <div class="text-sm text-pink-400 font-medium">Open Legacy UI →</div>
+                </div>
+            </a>
+
+            <!-- Readme -->
+            <a href="README.md" class="card-hover group">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg p-6 h-full hover:border-cyan-500 transition-colors">
+                    <div class="w-12 h-12 bg-cyan-600/20 border border-cyan-500/50 rounded-lg flex items-center justify-center mb-4 group-hover:bg-cyan-600/30 transition">
+                        <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">Project README</h3>
+                    <p class="text-slate-400 text-sm mb-4">
+                        Complete implementation summary, file structure, architecture overview, and deployment checklist.
+                    </p>
+                    <div class="text-sm text-cyan-400 font-medium">Read Full Summary →</div>
+                </div>
+            </a>
+        </div>
+
+        <!-- Feature Grid -->
+        <div class="mb-16">
+            <h3 class="text-2xl font-bold mb-8">System Capabilities</h3>
+            <div class="grid md:grid-cols-2 gap-6">
+                <div class="bg-slate-800/30 border border-slate-700 rounded-lg p-6">
+                    <h4 class="text-lg font-bold text-cyan-400 mb-4">Central Brain</h4>
+                    <ul class="space-y-2 text-sm text-slate-300">
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Fleet orchestration</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Demand prediction</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Optimal dispatching</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Fleet rebalancing</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Anomaly detection</li>
+                    </ul>
+                </div>
+                <div class="bg-slate-800/30 border border-slate-700 rounded-lg p-6">
+                    <h4 class="text-lg font-bold text-purple-400 mb-4">Pod Brains (x8)</h4>
+                    <ul class="space-y-2 text-sm text-slate-300">
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Autonomous decisions</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Path planning</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Battery management</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Obstacle avoidance</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Health diagnostics</li>
+                    </ul>
+                </div>
+                <div class="bg-slate-800/30 border border-slate-700 rounded-lg p-6">
+                    <h4 class="text-lg font-bold text-blue-400 mb-4">Network Models</h4>
+                    <ul class="space-y-2 text-sm text-slate-300">
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Mumbai (18 nodes)</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Pune (8 nodes)</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Nashik, Manesar, Udyog Vihar</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Goa MOPA (32km corridor)</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Switchable on-the-fly</li>
+                    </ul>
+                </div>
+                <div class="bg-slate-800/30 border border-slate-700 rounded-lg p-6">
+                    <h4 class="text-lg font-bold text-emerald-400 mb-4">Performance</h4>
+                    <ul class="space-y-2 text-sm text-slate-300">
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> 3000+ ticks/second</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Sub-50ms decisions</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Real-time visualization</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Scales to 32+ pods</li>
+                        <li class="flex items-start"><span class="text-emerald-400 mr-2">✓</span> Production ready</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Structure -->
+        <div class="bg-slate-800/30 border border-slate-700 rounded-lg p-8 mb-12">
+            <h3 class="text-2xl font-bold mb-6">File Structure</h3>
+            <div class="grid md:grid-cols-2 gap-8 text-sm">
+                <div>
+                    <h4 class="font-bold text-cyan-400 mb-3">Core System</h4>
+                    <div class="space-y-2 font-mono text-slate-300">
+                        <div><span class="text-emerald-400">📄</span> central-brain.js</div>
+                        <div><span class="text-emerald-400">📄</span> pod-brain.js</div>
+                        <div><span class="text-emerald-400">📄</span> network-model.js</div>
+                        <div><span class="text-emerald-400">📄</span> simulation-orchestrator.js</div>
+                        <div><span class="text-emerald-400">📄</span> intelligent-simulation.html</div>
+                    </div>
+                </div>
+                <div>
+                    <h4 class="font-bold text-purple-400 mb-3">Documentation & Examples</h4>
+                    <div class="space-y-2 font-mono text-slate-300">
+                        <div><span class="text-blue-400">📖</span> SYSTEM_ARCHITECTURE.md</div>
+                        <div><span class="text-blue-400">📖</span> QUICK_START.md</div>
+                        <div><span class="text-blue-400">📖</span> README.md</div>
+                        <div><span class="text-blue-400">📖</span> examples.js (12 examples)</div>
+                        <div><span class="text-blue-400">📖</span> index.html (legacy)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Call to Action -->
+        <div class="bg-gradient-to-r from-purple-900/30 to-blue-900/30 border border-purple-500/50 rounded-lg p-12 text-center">
+            <h3 class="text-3xl font-bold mb-4">Ready to Deploy?</h3>
+            <p class="text-lg text-slate-300 mb-8">
+                Start with the interactive simulation to see the intelligent orchestration in action, or dive into the architecture docs to understand the complete system.
+            </p>
+            <div class="flex justify-center gap-4 flex-wrap">
+                <a href="intelligent-simulation.html" class="px-8 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-lg font-bold transition transform hover:scale-105">
+                    🚀 Launch Simulation
+                </a>
+                <a href="SYSTEM_ARCHITECTURE.md" class="px-8 py-3 bg-slate-700 hover:bg-slate-600 rounded-lg font-bold transition transform hover:scale-105">
+                    📚 Read Documentation
+                </a>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="mt-16 border-t border-slate-700 py-8">
+        <div class="max-w-7xl mx-auto px-6 text-center text-sm text-slate-400">
+            <p>
+                Pod Intelligence System v2.0 • 
+                <span class="text-emerald-400">✓ Production Ready</span> • 
+                March 5, 2026
+            </p>
+            <p class="mt-2">
+                Complete autonomous pod transit management with central brain orchestration and distributed AI decision-making.
+            </p>
+        </div>
+    </footer>
+</body>
+</html>

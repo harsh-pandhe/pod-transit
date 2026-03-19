@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Transit - Operator Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .card {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .card-header {
+            font-size: 14px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .card-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #0ea5e9 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: #94a3b8;
+            font-size: 13px;
+        }
+
+        .metric-value {
+            font-weight: 700;
+            color: #0ea5e9;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 5px;
+        }
+
+        .status-active {
+            background: #10b981;
+            color: #ecfdf5;
+        }
+
+        .status-idle {
+            background: #06b6d4;
+            color: #ecf7f6;
+        }
+
+        .status-charging {
+            background: #f59e0b;
+            color: #fffbeb;
+        }
+
+        .status-error {
+            background: #ef4444;
+            color: #fef2f2;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 1px solid #334155;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .title {
+            font-size: 32px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #0ea5e9 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .control-panel {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #e2e8f0;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+
+        .btn:hover {
+            background: #334155;
+        }
+
+        .btn-danger {
+            border-color: #ef4444;
+            color: #fca5a5;
+        }
+
+        .btn-success {
+            border-color: #10b981;
+            color: #86efac;
+        }
+
+        .pod-card {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pod-info {
+            flex: 1;
+        }
+
+        .pod-name {
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .pod-status {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 15px;
+        }
+
+        .tab-container {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #334155;
+        }
+
+        .tab {
+            padding: 10px 15px;
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-weight: 600;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #0ea5e9;
+            border-bottom-color: #0ea5e9;
+        }
+
+        .grid-2 {
+            grid-column: span 2;
+        }
+
+        .grid-full {
+            grid-column: 1 / -1;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .grid-2, .grid-full {
+                grid-column: 1;
+            }
+
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .control-panel {
+                margin-top: 15px;
+                flex-wrap: wrap;
+            }
+        }
+
+        .loading {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .alert {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            border-radius: 8px;
+            padding: 12px;
+            color: #fca5a5;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid #10b981;
+            color: #86efac;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <div>
+                <h1 class="title">Pod Transit Operator Console</h1>
+                <p class="subtitle">Real-time Fleet Management & Analytics</p>
+            </div>
+            <div class="control-panel">
+                <button class="btn btn-success" onclick="toggleSimulation()">▶ START SIM</button>
+                <button class="btn btn-danger" onclick="emergencyStop()">🛑 EMERGENCY</button>
+                <button class="btn" onclick="refreshData()">🔄 REFRESH</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div style="max-width: 1400px; margin: 0 auto;">
+        <div class="dashboard">
+            <!-- Fleet Status Card -->
+            <div class="card">
+                <div class="card-header">Fleet Status</div>
+                <div class="card-title" id="podCount">12</div>
+                <div class="metric">
+                    <span class="metric-label">Active Pods</span>
+                    <span class="metric-value" id="activePods">8</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Available</span>
+                    <span class="metric-value" id="availablePods">3</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Charging</span>
+                    <span class="metric-value" id="chargingPods">1</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Battery</span>
+                    <span class="metric-value" id="avgBattery">78%</span>
+                </div>
+            </div>
+
+            <!-- Network Health Card -->
+            <div class="card">
+                <div class="card-header">Network Health</div>
+                <div class="card-title" id="networkHealth">95%</div>
+                <div class="metric">
+                    <span class="metric-label">Uptime (24h)</span>
+                    <span class="metric-value">99.9%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Response Time</span>
+                    <span class="metric-value">120ms</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Network Nodes</span>
+                    <span class="metric-value">42</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Active Routes</span>
+                    <span class="metric-value">18</span>
+                </div>
+            </div>
+
+            <!-- Demand Metrics Card -->
+            <div class="card">
+                <div class="card-header">Demand Metrics</div>
+                <div class="card-title" id="totalRides">247</div>
+                <div class="metric">
+                    <span class="metric-label">Today's Rides</span>
+                    <span class="metric-value" id="todayRides">247</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Wait Time</span>
+                    <span class="metric-value">3.2 min</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Peak Hour</span>
+                    <span class="metric-value">6-7 PM</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Utilization</span>
+                    <span class="metric-value">84%</span>
+                </div>
+            </div>
+
+            <!-- Active Pods Grid (Full Width) -->
+            <div class="card grid-full">
+                <div class="card-header">🚗 Active Pods</div>
+                <div class="tab-container">
+                    <button class="tab active" onclick="filterPods('all')">All</button>
+                    <button class="tab" onclick="filterPods('active')">Active</button>
+                    <button class="tab" onclick="filterPods('idle')">Idle</button>
+                    <button class="tab" onclick="filterPods('charging')">Charging</button>
+                </div>
+                <div id="podsList"></div>
+            </div>
+
+            <!-- Utilization Chart -->
+            <div class="card grid-2">
+                <div class="card-header">📊 Fleet Utilization</div>
+                <div class="chart-container">
+                    <canvas id="utilizationChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Revenue Chart -->
+            <div class="card grid-2">
+                <div class="card-header">💰 Revenue Analytics</div>
+                <div class="chart-container">
+                    <canvas id="revenueChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Demand Heatmap -->
+            <div class="card grid-full">
+                <div class="card-header">🔥 Demand Heatmap (Hourly)</div>
+                <div style="display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin-top: 15px;" id="heatmap"></div>
+            </div>
+
+            <!-- Alerts -->
+            <div class="card grid-full">
+                <div class="card-header">⚠️ System Alerts</div>
+                <div id="alertsList">
+                    <div class="alert success">✓ All pods operating normally</div>
+                </div>
+            </div>
+
+            <!-- Performance Metrics -->
+            <div class="card">
+                <div class="card-header">Performance</div>
+                <div class="metric">
+                    <span class="metric-label">Avg Trip Distance</span>
+                    <span class="metric-value">5.2 km</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Avg Trip Duration</span>
+                    <span class="metric-value">12 min</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Passenger Rating</span>
+                    <span class="metric-value">4.8/5</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Completion Rate</span>
+                    <span class="metric-value">99.2%</span>
+                </div>
+            </div>
+
+            <!-- Revenue Summary -->
+            <div class="card">
+                <div class="card-header">Revenue Summary</div>
+                <div class="metric">
+                    <span class="metric-label">Today's Revenue</span>
+                    <span class="metric-value">₹18,240</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">This Week</span>
+                    <span class="metric-value">₹104,560</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">This Month</span>
+                    <span class="metric-value">₹432,100</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Growth (MoM)</span>
+                    <span class="metric-value" style="color: #10b981;">↑ 12.5%</span>
+                </div>
+            </div>
+
+            <!-- Network Status -->
+            <div class="card">
+                <div class="card-header">Network Coverage</div>
+                <div class="metric">
+                    <span class="metric-label">Mumbai Metro</span>
+                    <span class="status-badge status-active">Active</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Pune City</span>
+                    <span class="status-badge status-active">Active</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Nashik Urban</span>
+                    <span class="status-badge status-idle">Idle</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">GOA Corridor</span>
+                    <span class="status-badge status-charging">Maintenance</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Charts
+        const ctx1 = document.getElementById('utilizationChart').getContext('2d');
+        new Chart(ctx1, {
+            type: 'line',
+            data: {
+                labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '23:59'],
+                datasets: [{
+                    label: 'Fleet Utilization %',
+                    data: [12, 25, 45, 68, 84, 72, 35],
+                    borderColor: '#0ea5e9',
+                    backgroundColor: 'rgba(14, 165, 233, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#94a3b8' } }
+                },
+                scales: {
+                    x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                    y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' }, max: 100 }
+                }
+            }
+        });
+
+        const ctx2 = document.getElementById('revenueChart').getContext('2d');
+        new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                datasets: [{
+                    label: 'Daily Revenue (₹)',
+                    data: [14200, 15800, 16500, 18240, 19600, 22400, 18100],
+                    backgroundColor: ['#0ea5e9', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#14b8a6', '#0ea5e9'],
+                    borderRadius: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#94a3b8' } }
+                },
+                scales: {
+                    x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                    y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                }
+            }
+        });
+
+        // Pod List
+        const pods = [
+            { id: 'P-01', status: 'MOVING', battery: 92, location: 'Andheri → BKC', passenger: 'John D.', color: 'status-active' },
+            { id: 'P-02', status: 'MOVING', battery: 85, location: 'CST → Marine Drive', passenger: 'Sarah M.', color: 'status-active' },
+            { id: 'P-03', status: 'IDLE', battery: 78, location: 'Dadar Station', passenger: 'None', color: 'status-idle' },
+            { id: 'P-04', status: 'MOVING', battery: 68, location: 'Powai → Lower Parel', passenger: 'Mike T.', color: 'status-active' },
+            { id: 'P-05', status: 'CHARGING', battery: 45, location: 'Charging Depot', passenger: 'None', color: 'status-charging' },
+            { id: 'P-06', status: 'MOVING', battery: 88, location: 'Colaba → Fort', passenger: 'Emma W.', color: 'status-active' },
+        ];
+
+        function renderPods(filter = 'all') {
+            const filtered = filter === 'all' ? pods : pods.filter(p => p.status.toLowerCase() === filter.toLowerCase());
+            const html = filtered.map(pod => `
+                <div class="pod-card">
+                    <div class="pod-info">
+                        <div class="pod-name">🚗 ${pod.id}</div>
+                        <div class="pod-status">${pod.location} • ${pod.passenger}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="status-badge ${pod.color}">${pod.status}</span>
+                        <div style="font-size: 13px; color: #94a3b8; margin-top: 5px;">🔋 ${pod.battery}%</div>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('podsList').innerHTML = html;
+        }
+
+        function filterPods(filter) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            renderPods(filter);
+        }
+
+        // Demand Heatmap
+        function generateHeatmap() {
+            const hours = 24;
+            const baseHTML = Array(hours).fill(0).map((_, i) => {
+                const intensity = Math.sin(i / 24 * Math.PI) * 0.8 + 0.2;
+                const color = Math.round(intensity * 255);
+                return `<div style="width: 100%; aspect-ratio: 1; background: rgba(14, 165, 233, ${intensity}); border-radius: 4px;" title="Hour ${i}"></div>`;
+            }).join('');
+            document.getElementById('heatmap').innerHTML = baseHTML;
+        }
+
+        // Live updates
+        function refreshData() {
+            document.getElementById('activePods').textContent = (Math.random() * 3 + 6).toFixed(0);
+            document.getElementById('networkHealth').textContent = (Math.random() * 5 + 90).toFixed(0) + '%';
+            document.getElementById('todayRides').textContent = (Math.random() * 50 + 230).toFixed(0);
+            renderPods('all');
+        }
+
+        function toggleSimulation() {
+            alert('Simulation started. All pods are now operational.');
+        }
+
+        function emergencyStop() {
+            document.getElementById('alertsList').innerHTML = '<div class="alert">🛑 EMERGENCY STOP ACTIVATED - All pods halted for safety check</div>';
+            setTimeout(() => {
+                document.getElementById('alertsList').innerHTML = '<div class="alert success">✓ Emergency resolved. Normal operations resumed</div>';
+            }, 3000);
+        }
+
+        // Initialize on load
+        renderPods();
+        generateHeatmap();
+        setInterval(refreshData, 5000);
+    </script>
+</body>
+</html>

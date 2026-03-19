@@ -1,0 +1,34 @@
+{
+  "name": "pod-transit-api",
+  "version": "1.0.0",
+  "description": "Pod Transit - Autonomous Pod System Backend API",
+  "main": "app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "echo 'Tests not configured yet'",
+    "deploy": "gcloud run deploy pod-transit-api --source . --platform managed --region asia-south1 --allow-unauthenticated",
+    "build": "echo 'Ready to build'"
+  },
+  "keywords": [
+    "pod-transit",
+    "autonomous",
+    "ride-sharing",
+    "google-cloud"
+  ],
+  "author": "Harsh Pandhe",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "firebase-admin": "^12.0.0",
+    "dotenv": "^16.3.1",
+    "helmet": "^7.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
