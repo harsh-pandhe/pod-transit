@@ -5,7 +5,7 @@
 This project is configured for Vercel with:
 - `vercel.json` using Vite build output (`dist`)
 - GitHub Actions CI at `.github/workflows/ci.yml`
-- Node 18 compatibility via `package.json` engines
+- Node 24 compatibility via `package.json` engines
 
 ## Deploy via GitHub (Recommended)
 

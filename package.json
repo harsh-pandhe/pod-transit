@@ -45,6 +45,6 @@
     "wait-on": "^9.0.4"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   }
 }
