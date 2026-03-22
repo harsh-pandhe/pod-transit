@@ -1,11 +1,13 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   Play, Pause, FastForward, Save, FolderOpen, RefreshCcw,
-  MousePointer2, PlusCircle, Building2, Link2, Upload, Database, Plus, X
+  MousePointer2, PlusCircle, Building2, Link2, Upload, Database, Plus, X, FileDown, FileUp, Repeat, BarChart3
 } from 'lucide-react';
 import { UltraSimCore } from './api/ultra-sim-core.js';
 import StationView from './components/StationView.jsx';
 import DepotView from './components/DepotView.jsx';
+import { importCityNetworkFromKmz } from './api/city-importer.js';
+import { exportRunCsv, exportBoardPdfLike } from './api/report-exporter.js';
 
 const SIM_STEP_SECONDS = 0.15;
 const DEFAULT_CURVE = 36;
@@ -173,6 +175,16 @@ export default function App() {
 
   const [podIdInput, setPodIdInput] = useState('POD-201');
   const [selectedDepot, setSelectedDepot] = useState('');
+  const [seedInput, setSeedInput] = useState('INVESTOR-DEMO-001');
+  const [scenarioChoice, setScenarioChoice] = useState('peak_hour_surge');
+  const [executiveMode, setExecutiveMode] = useState(false);
+  const [storyMode, setStoryMode] = useState(false);
+  const [analyticsTab, setAnalyticsTab] = useState('overview');
+  const [timelineNotes, setTimelineNotes] = useState([]);
+  const [snapshotCards, setSnapshotCards] = useState([]);
+  const [compareBaseline, setCompareBaseline] = useState(null);
+  const [compareCurrent, setCompareCurrent] = useState(null);
+  const [importedCityName, setImportedCityName] = useState('');
 
   // Drag state
   const [draggingNode, setDraggingNode] = useState(null);
@@ -180,6 +192,8 @@ export default function App() {
   const [hoverEdge, setHoverEdge] = useState(null);
 
   const svgRef = useRef(null);
+  const importInputRef = useRef(null);
+  const lastCardMinuteRef = useRef(-1);
 
   const edgeMap = useMemo(() => {
     const map = new Map();
@@ -195,6 +209,12 @@ export default function App() {
     });
     return set.size;
   }, [edges]);
+
+  const createCore = () => {
+    const core = new UltraSimCore({ nodes, edges, seed: seedInput });
+    const validation = core.validateNetwork();
+    return { core, validation };
+  };
 
   const handleMouseMove = (e) => {
     if (!svgRef.current) return;
@@ -357,15 +377,20 @@ export default function App() {
 
   const handlePlay = () => {
     if (simMode === 'edit') {
-      simCore.current = new UltraSimCore({ nodes, edges });
-      const validation = simCore.current.validateNetwork();
+      const { core, validation } = createCore();
       if (!validation.ok) {
         alert(`Network Error:\n${validation.errors.join('\n')}`);
         return;
       }
+      simCore.current = core;
       setSimMode('play');
       setSnapshot(simCore.current.getSnapshot());
       setSelectedDepot(simCore.current.depotIds[0] || '');
+      setTimelineNotes([{ t: 0, label: `Simulation started with seed ${seedInput}` }]);
+      setSnapshotCards([]);
+      setCompareBaseline(null);
+      setCompareCurrent(null);
+      lastCardMinuteRef.current = -1;
     }
     setSimRunning(prev => !prev);
   };
@@ -377,6 +402,7 @@ export default function App() {
     setSnapshot(null);
     setDetailedStation(null);
     setDetailedDepot(null);
+    setCompareCurrent(null);
   };
 
   const handleFastForward = () => {
@@ -400,6 +426,79 @@ export default function App() {
     const nextIdNum = Number((podIdInput.match(/(\d+)$/) || [0, 201])[1]) + 1;
     setPodIdInput(`POD-${String(nextIdNum).padStart(3, '0')}`);
     setSnapshot(simCore.current.getSnapshot());
+  };
+
+  const handleReplayFromSeed = () => {
+    if (!simCore.current) return;
+    simCore.current.resetWithSeed(seedInput);
+    const next = simCore.current.getSnapshot();
+    setSnapshot(next);
+    setSimRunning(false);
+    setTimelineNotes(prev => [...prev, { t: next.timeSec, label: `Replay reset with seed ${seedInput}` }].slice(-25));
+  };
+
+  const handleStartScenario = () => {
+    if (!simCore.current) return;
+    const result = simCore.current.applyScenario(scenarioChoice);
+    if (!result.ok) return;
+    const next = simCore.current.getSnapshot();
+    setSnapshot(next);
+    setTimelineNotes(prev => [...prev, { t: next.timeSec, label: `Scenario started: ${scenarioChoice}` }].slice(-25));
+  };
+
+  const handleInjectDisruption = () => {
+    if (!simCore.current) return;
+    const result = simCore.current.injectDisruption('blocked_corridor');
+    if (!result.ok) return;
+    const next = simCore.current.getSnapshot();
+    setSnapshot(next);
+    setTimelineNotes(prev => [...prev, { t: next.timeSec, label: 'Disruption injected: blocked corridor' }].slice(-25));
+  };
+
+  const handleCompare = () => {
+    if (!simCore.current) return;
+    const report = simCore.current.getRunReport();
+    if (!compareBaseline) {
+      setCompareBaseline(report);
+      setTimelineNotes(prev => [...prev, { t: simCore.current.timeSec, label: 'Compare baseline captured' }].slice(-25));
+      return;
+    }
+    setCompareCurrent(report);
+  };
+
+  const handleExportCsv = () => {
+    if (!simCore.current) return;
+    const report = simCore.current.getRunReport();
+    const stationSummary = simCore.current.getResults().stationSummary;
+    exportRunCsv(report, stationSummary);
+  };
+
+  const handleExportPdfLike = () => {
+    if (!simCore.current) return;
+    exportBoardPdfLike(simCore.current.getRunReport(), snapshotCards);
+  };
+
+  const handleImportCityClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportCity = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const imported = await importCityNetworkFromKmz(file);
+    if (!imported.ok) {
+      alert(imported.message || 'Import failed');
+      return;
+    }
+
+    handleStop();
+    setNodes(imported.nodes);
+    setEdges(imported.edges);
+    setImportedCityName(imported.cityName);
+    setStationCounter(imported.stats.stations + 1);
+    setDepotCounter(imported.stats.depots + 1);
+    setTimelineNotes([{ t: 0, label: `Imported city network: ${imported.cityName}` }]);
   };
 
   const handleSave = async () => {
@@ -458,12 +557,41 @@ export default function App() {
     return () => clearInterval(interval);
   }, [simRunning]);
 
+  useEffect(() => {
+    if (!snapshot) return;
+    const minute = Math.floor((snapshot.timeSec || 0) / 60);
+    if (minute > 0 && minute % 2 === 0 && minute !== lastCardMinuteRef.current) {
+      lastCardMinuteRef.current = minute;
+      const report = snapshot.report || {};
+      setSnapshotCards(prev => {
+        const next = [...prev, {
+          t: snapshot.timeSec,
+          title: `Minute ${minute} Snapshot`,
+          meanWaitSec: report.meanWaitSec || 0,
+          utilizationPct: report.utilizationPct || 0,
+          reliabilityPct: report.reliabilityPct || 0,
+        }];
+        return next.slice(-8);
+      });
+    }
+
+    const lastEvent = snapshot.recentEvents?.[snapshot.recentEvents.length - 1];
+    if (lastEvent && ['scenario_ended', 'scenario_blocked_corridor', 'scenario_outage', 'charging_complete'].includes(lastEvent.type)) {
+      setTimelineNotes(prev => {
+        const note = { t: snapshot.timeSec, label: `${lastEvent.type.replaceAll('_', ' ')}` };
+        if (prev.length > 0 && prev[prev.length - 1].label === note.label) return prev;
+        return [...prev, note].slice(-25);
+      });
+    }
+  }, [snapshot]);
+
   const vehicles = snapshot?.vehicles || [];
   const waitingByStation = snapshot?.waitingByStation || {};
   const simTime = snapshot ? Math.floor(snapshot.timeSec / 60) : 0;
   const chargingPods = vehicles.filter(v => v.state === 'charging').length;
   const lowBatteryPods = vehicles.filter(v => v.battery < 20).length;
   const criticalBatteryPods = vehicles.filter(v => v.battery < 8).length;
+  const report = snapshot?.report || null;
   const recentEvents = (snapshot?.recentEvents || []).slice(-8).reverse();
   const depotStats = (snapshot?.depotIds || Object.keys(nodes).filter(id => nodes[id]?.type === 'depot')).map(depotId => {
     const chargingVehicles = vehicles.filter(v => v.node === depotId && v.state === 'charging');
@@ -485,22 +613,23 @@ export default function App() {
   });
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 to-slate-100 text-slate-800 font-sans select-none">
-      <div className="h-8 bg-slate-800 text-slate-300 flex items-center px-4 text-xs font-semibold titlebar shadow" style={{ WebkitAppRegion: 'drag' }}>
+    <div className="future-shell flex flex-col h-screen text-slate-100 font-sans select-none">
+      <div className="future-titlebar h-8 flex items-center px-4 text-xs font-semibold titlebar shadow" style={{ WebkitAppRegion: 'drag' }}>
         <span>Hermes PRT Simulator - {simMode === 'edit' ? 'Editing Network' : 'Simulation Mode'}</span>
       </div>
 
-      <div className="h-16 bg-white/95 backdrop-blur border-b border-slate-200 flex items-center px-4 justify-between shadow-sm z-10">
+      <div className="future-toolbar h-16 backdrop-blur border-b flex items-center px-4 justify-between shadow-sm z-10">
         <div className="flex space-x-2 border-r pr-4 border-slate-200 items-center">
           <ToolbarButton icon={<FolderOpen />} label="Open" onClick={handleLoad} disabled={simMode === 'play'} />
           <ToolbarButton icon={<Save />} label="Save" onClick={handleSave} disabled={simMode === 'play'} />
           <ToolbarButton icon={<Database />} label="Case" onClick={() => loadCaseStudy(selectedCaseStudy)} disabled={simMode === 'play'} />
+          <ToolbarButton icon={<FileUp />} label="Import" onClick={handleImportCityClick} disabled={simMode === 'play'} />
           <ToolbarButton icon={<RefreshCcw />} label="Clear" onClick={() => { setNodes({}); setEdges([]); setStationCounter(1); setDepotCounter(1); }} disabled={simMode === 'play'} />
           <select
             value={selectedCaseStudy}
             onChange={(event) => setSelectedCaseStudy(event.target.value)}
             disabled={simMode === 'play'}
-            className="h-8 rounded border border-slate-300 text-xs px-2 text-slate-700 bg-white"
+            className="h-8 rounded border border-cyan-500/30 text-xs px-2 text-cyan-100 bg-slate-900/70"
           >
             {Object.entries(CASE_STUDIES).map(([key, item]) => (
               <option key={key} value={key}>{item.label}</option>
@@ -521,10 +650,14 @@ export default function App() {
           <ToolbarButton icon={simRunning ? <Pause className="text-amber-500" /> : <Play className="text-emerald-500" />} label={simRunning ? 'Pause' : 'Run'} onClick={handlePlay} />
           {simMode === 'play' && <ToolbarButton icon={<RefreshCcw />} label="Stop" onClick={handleStop} />}
           <ToolbarButton icon={<FastForward className="text-blue-500" />} label="Warmup" onClick={handleFastForward} disabled={simMode === 'edit'} />
+          {simMode === 'play' && <ToolbarButton icon={<Repeat className="text-violet-500" />} label="Replay" onClick={handleReplayFromSeed} />}
+          {simMode === 'play' && <ToolbarButton icon={<BarChart3 className="text-slate-700" />} label={executiveMode ? 'Ops' : 'Exec'} onClick={() => setExecutiveMode(prev => !prev)} />}
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden relative bg-slate-100">
+      <input ref={importInputRef} type="file" accept=".kmz" className="hidden" onChange={handleImportCity} />
+
+      <div className="future-main flex flex-1 overflow-hidden relative">
         <svg ref={svgRef} className="w-full h-full cursor-crosshair" onMouseMove={handleMouseMove} onClick={handleCanvasClick} onMouseUp={handleNodeMouseUp} onMouseLeave={handleNodeMouseUp}>
           <defs>
             <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -654,18 +787,94 @@ export default function App() {
         </svg>
 
         {simMode === 'play' && (
-          <div className="absolute right-0 top-0 bottom-0 w-80 bg-white border-l border-slate-200 shadow-xl flex flex-col pointer-events-auto z-20">
-            <div className="p-4 bg-slate-800 text-white font-semibold text-sm">Simulation Metrics</div>
-            <div className="p-4 text-xs font-mono space-y-2 border-b border-slate-200 bg-slate-50">
-              <div className="flex justify-between"><span>Time:</span> <span>{Math.floor(simTime / 60).toString().padStart(2, '0')}:{(simTime % 60).toString().padStart(2, '0')}</span></div>
-              <div className="flex justify-between"><span>Active Pods:</span> <span>{vehicles.length}</span></div>
-              <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
-                <div className="rounded bg-yellow-100 text-yellow-800 px-2 py-1 text-center">Charging: {chargingPods}</div>
-                <div className="rounded bg-orange-100 text-orange-800 px-2 py-1 text-center">Low: {lowBatteryPods}</div>
-                <div className="rounded bg-red-100 text-red-800 px-2 py-1 text-center">Critical: {criticalBatteryPods}</div>
-              </div>
+          <div className="future-sidebar absolute right-0 top-0 bottom-0 w-[22rem] border-l shadow-xl flex flex-col pointer-events-auto z-20">
+            <div className="p-4 bg-slate-900/90 text-cyan-100 font-semibold text-sm border-b border-cyan-500/20">Simulation Metrics</div>
+
+            <div className="p-2 border-b border-slate-700 bg-slate-900/70 grid grid-cols-5 gap-1 text-[10px]">
+              <AnalyticsTabButton label="Overview" active={analyticsTab === 'overview'} onClick={() => setAnalyticsTab('overview')} />
+              <AnalyticsTabButton label="Story" active={analyticsTab === 'story'} onClick={() => setAnalyticsTab('story')} />
+              <AnalyticsTabButton label="Depot" active={analyticsTab === 'depot'} onClick={() => setAnalyticsTab('depot')} />
+              <AnalyticsTabButton label="Timeline" active={analyticsTab === 'timeline'} onClick={() => setAnalyticsTab('timeline')} />
+              <AnalyticsTabButton label="Demand" active={analyticsTab === 'demand'} onClick={() => setAnalyticsTab('demand')} />
             </div>
 
+            {(analyticsTab === 'overview' || analyticsTab === 'story') && (
+              <div className="p-3 border-b border-slate-200 bg-white text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-600">Seed</span>
+                  <input value={seedInput} onChange={(event) => setSeedInput(event.target.value)} className="w-40 border border-slate-300 rounded px-2 py-1 text-[11px]" />
+                </div>
+                {importedCityName && <div className="text-[10px] text-blue-700">Imported: {importedCityName}</div>}
+              </div>
+            )}
+
+            {analyticsTab === 'overview' && executiveMode && report && (
+              <div className="p-3 border-b border-slate-200 bg-slate-50">
+                <h3 className="text-[11px] font-bold text-slate-600 uppercase mb-2">Executive KPIs</h3>
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <KpiCard label="Served" value={report.servedGroups} tone="blue" />
+                  <KpiCard label="Mean Wait" value={`${report.meanWaitSec}s`} tone="amber" />
+                  <KpiCard label="Utilization" value={`${report.utilizationPct}%`} tone="emerald" />
+                  <KpiCard label="Reliability" value={`${report.reliabilityPct}%`} tone="cyan" />
+                  <KpiCard label="Energy" value={report.energyUnits} tone="slate" />
+                  <KpiCard label="Congestion" value={report.congestionIndex} tone="rose" />
+                </div>
+              </div>
+            )}
+
+            {analyticsTab === 'overview' && (
+              <div className="p-4 text-xs font-mono space-y-2 border-b border-slate-200 bg-slate-50">
+                <div className="flex justify-between"><span>Time:</span> <span>{Math.floor(simTime / 60).toString().padStart(2, '0')}:{(simTime % 60).toString().padStart(2, '0')}</span></div>
+                <div className="flex justify-between"><span>Active Pods:</span> <span>{vehicles.length}</span></div>
+                <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
+                  <div className="rounded bg-yellow-100 text-yellow-800 px-2 py-1 text-center">Charging: {chargingPods}</div>
+                  <div className="rounded bg-orange-100 text-orange-800 px-2 py-1 text-center">Low: {lowBatteryPods}</div>
+                  <div className="rounded bg-red-100 text-red-800 px-2 py-1 text-center">Critical: {criticalBatteryPods}</div>
+                </div>
+              </div>
+            )}
+
+            {analyticsTab === 'story' && (
+            <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
+              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Story Mode</h3>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStoryMode(prev => !prev)} className={`rounded px-2 py-1 text-[10px] ${storyMode ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                  {storyMode ? 'Story On' : 'Story Off'}
+                </button>
+                <select value={scenarioChoice} onChange={(event) => setScenarioChoice(event.target.value)} className="flex-1 border border-slate-300 rounded px-2 py-1 text-[10px]">
+                  <option value="peak_hour_surge">Peak-hour surge</option>
+                  <option value="outage">Station outage</option>
+                  <option value="blocked_corridor">Blocked corridor</option>
+                  <option value="depot_overload">Depot overload</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={handleStartScenario} className="rounded bg-indigo-600 hover:bg-indigo-700 text-white py-1 text-[10px]">Start Scenario</button>
+                <button onClick={handleInjectDisruption} className="rounded bg-rose-600 hover:bg-rose-700 text-white py-1 text-[10px]">Inject Disruption</button>
+                <button onClick={handleCompare} className="rounded bg-slate-700 hover:bg-slate-800 text-white py-1 text-[10px]">Compare B/A</button>
+                <button onClick={handleReplayFromSeed} className="rounded bg-violet-600 hover:bg-violet-700 text-white py-1 text-[10px]">Replay Seed</button>
+              </div>
+              {compareBaseline && compareCurrent && (
+                <div className="rounded border border-slate-200 bg-slate-50 p-2 text-[10px]">
+                  <div>Wait delta: {(compareCurrent.meanWaitSec - compareBaseline.meanWaitSec).toFixed(2)}s</div>
+                  <div>Reliability delta: {(compareCurrent.reliabilityPct - compareBaseline.reliabilityPct).toFixed(2)}%</div>
+                  <div>Utilization delta: {(compareCurrent.utilizationPct - compareBaseline.utilizationPct).toFixed(2)}%</div>
+                </div>
+              )}
+            </div>
+            )}
+
+            {analyticsTab === 'overview' && (
+            <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2 text-xs">
+              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Export Reports</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={handleExportCsv} className="rounded bg-emerald-600 hover:bg-emerald-700 text-white py-1 text-[10px] flex items-center justify-center gap-1"><FileDown size={12} /> CSV</button>
+                <button onClick={handleExportPdfLike} className="rounded bg-sky-600 hover:bg-sky-700 text-white py-1 text-[10px] flex items-center justify-center gap-1"><FileDown size={12} /> PDF Brief</button>
+              </div>
+            </div>
+            )}
+
+            {analyticsTab === 'depot' && (
             <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2">
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Add Pod At Depot</h3>
               <input
@@ -687,7 +896,9 @@ export default function App() {
                 <Plus size={14} /> Add Pod
               </button>
             </div>
+            )}
 
+            {analyticsTab === 'overview' && (
             <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
               <h3 className="font-bold text-slate-500 uppercase tracking-wider">Color Legend</h3>
               <LegendRow color="bg-red-500" text="Red: Empty / Repositioning" />
@@ -696,7 +907,9 @@ export default function App() {
               <LegendRow color="bg-slate-400" text="Grey: Waiting slot" />
               <LegendRow color="bg-yellow-500" text="Yellow: Charging at depot" />
             </div>
+            )}
 
+            {analyticsTab === 'depot' && (
             <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2 text-xs">
               <h3 className="font-bold text-slate-500 uppercase tracking-wider">Battery & Charge Events</h3>
               <div className="max-h-28 overflow-y-auto custom-scrollbar space-y-1">
@@ -723,7 +936,9 @@ export default function App() {
                 })}
               </div>
             </div>
+            )}
 
+            {analyticsTab === 'depot' && (
             <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
               <h3 className="font-bold text-slate-500 uppercase tracking-wider">Depot Inner Working</h3>
               <div className="max-h-44 overflow-y-auto custom-scrollbar space-y-2">
@@ -762,8 +977,36 @@ export default function App() {
                 ))}
               </div>
             </div>
+            )}
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
+              {analyticsTab === 'timeline' && (
+              <>
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Timeline</h3>
+              <div className="space-y-1 max-h-24 overflow-y-auto custom-scrollbar">
+                {timelineNotes.length === 0 && <div className="text-[10px] text-slate-400">No annotations yet.</div>}
+                {timelineNotes.slice(-8).map((note, idx) => (
+                  <div key={`${note.t}-${idx}`} className="text-[10px] rounded border border-slate-200 bg-white px-2 py-1">
+                    [{Math.floor(note.t / 60).toString().padStart(2, '0')}:{Math.floor(note.t % 60).toString().padStart(2, '0')}] {note.label}
+                  </div>
+                ))}
+              </div>
+
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Snapshot Cards</h3>
+              <div className="space-y-1 max-h-28 overflow-y-auto custom-scrollbar">
+                {snapshotCards.length === 0 && <div className="text-[10px] text-slate-400">Cards auto-generate every 2 minutes.</div>}
+                {snapshotCards.map((card, idx) => (
+                  <div key={`${card.t}-${idx}`} className="text-[10px] rounded border border-slate-200 bg-white px-2 py-1">
+                    <div className="font-semibold text-slate-700">{card.title}</div>
+                    <div>Wait {card.meanWaitSec}s | Util {card.utilizationPct}% | Reliability {card.reliabilityPct}%</div>
+                  </div>
+                ))}
+              </div>
+              </>
+              )}
+
+              {analyticsTab === 'demand' && (
+              <>
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Station Demand</h3>
               {Object.keys(nodes).filter(id => nodes[id].type === 'station').map(stationId => (
                 <div key={stationId} className="space-y-1">
@@ -789,16 +1032,24 @@ export default function App() {
                   />
                 </div>
               ))}
+              </>
+              )}
+
+              {(analyticsTab === 'overview' || analyticsTab === 'story' || analyticsTab === 'depot') && (
+                <div className="text-[10px] text-slate-400">
+                  Open Timeline or Demand tabs for detailed drill-down pages.
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      <div className="h-6 bg-slate-200 border-t border-slate-300 flex items-center px-4 text-[10px] text-slate-500 font-semibold justify-between z-10">
+      <div className="future-statusbar h-6 border-t flex items-center px-4 text-[10px] font-semibold justify-between z-10">
         <div>
           {simMode === 'edit'
             ? `EDIT MODE | Tool: ${mode.toUpperCase()} | Nodes: ${Object.keys(nodes).length} | Corridors: ${uniqueCorridorCount} (2-way)`
-            : 'SIMULATION RUNNING'}
+            : `SIMULATION RUNNING${report ? ` | Seed ${report.seed}` : ''}`}
         </div>
         {simMode === 'play' && <div>Wait Avg: {simCore.current?.getResults()?.overallMeanWaitSec}s | Serviced: {simCore.current?.getResults()?.totalServedGroups}</div>}
       </div>
@@ -827,10 +1078,23 @@ function ToolbarButton({ icon, label, onClick, active, disabled }) {
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex flex-col items-center justify-center w-14 h-12 rounded-lg transition-colors ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:bg-slate-100'} ${active ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-500/50' : 'text-slate-600'}`}
+      className={`future-tool-btn flex flex-col items-center justify-center w-14 h-12 rounded-lg transition-all duration-200 ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${active ? 'is-active' : ''}`}
     >
       <div className="mb-0.5">{React.cloneElement(icon, { size: 18 })}</div>
       <span className="text-[9px] font-bold uppercase tracking-wide">{label}</span>
+    </button>
+  );
+}
+
+function AnalyticsTabButton({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded px-2 py-1 border transition-all ${active
+        ? 'bg-cyan-500/20 text-cyan-100 border-cyan-400/60 shadow-[0_0_16px_-8px_rgba(34,211,238,0.9)]'
+        : 'bg-slate-800/70 text-slate-300 border-slate-600/70 hover:border-cyan-500/40 hover:text-cyan-100'}`}
+    >
+      {label}
     </button>
   );
 }
@@ -840,6 +1104,24 @@ function LegendRow({ color, text }) {
     <div className="flex items-center gap-2">
       <span className={`inline-block w-3 h-3 rounded-full ${color}`} />
       <span>{text}</span>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, tone }) {
+  const toneMap = {
+    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+    slate: 'bg-slate-50 text-slate-700 border-slate-200',
+    rose: 'bg-rose-50 text-rose-700 border-rose-200',
+  };
+
+  return (
+    <div className={`rounded border px-2 py-1 ${toneMap[tone] || toneMap.slate}`}>
+      <div className="uppercase text-[9px] tracking-wide">{label}</div>
+      <div className="font-semibold text-[11px]">{value}</div>
     </div>
   );
 }

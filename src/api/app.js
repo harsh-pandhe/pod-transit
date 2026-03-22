@@ -6,15 +6,15 @@
  * - Booking management
  * - Analytics collection
  * - Payment processing
- * 
+ *
  * Deployment: Google Cloud Run
  */
 
-const express = require('express');
-const cors = require('cors');
-const admin = require('firebase-admin');
-const dotenv = require('dotenv');
-const helmet = require('helmet');
+import express from 'express';
+import cors from 'cors';
+import admin from 'firebase-admin';
+import dotenv from 'dotenv';
+import helmet from 'helmet';
 
 dotenv.config();
 
@@ -23,15 +23,15 @@ const app = express();
 // Initialize Firebase Admin SDK only if credentials are available
 let db = null;
 try {
-    admin.initializeApp({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET
-    });
-    db = admin.firestore();
-    console.log('✓ Firebase Admin initialized successfully');
+  admin.initializeApp({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  });
+  db = admin.firestore();
+  console.log('Firebase Admin initialized successfully');
 } catch (error) {
-    console.warn('⚠ Firebase initialization skipped (running in development mode without credentials)');
-    console.warn('  Firebase features will be unavailable');
+  console.warn('Firebase initialization skipped (development mode without credentials)');
+  console.warn('Firebase-backed API routes will return 503 until credentials are configured');
 }
 
 // Middleware
@@ -42,18 +42,35 @@ app.use(express.urlencoded({ extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    next();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
 });
+
+function requireFirestore(req, res, next) {
+  if (db) {
+    next();
+    return;
+  }
+
+  res.status(503).json({
+    success: false,
+    error: 'Service unavailable',
+    message: 'Firestore is not configured. Set Firebase credentials to enable API routes.',
+  });
+}
 
 // ==================== HEALTH CHECK ====================
 app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime()
-    });
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    firestoreReady: Boolean(db),
+  });
 });
+
+// All API routes require a configured Firestore instance.
+app.use('/api', requireFirestore);
 
 // ==================== POD ROUTES ====================
 
@@ -62,31 +79,31 @@ app.get('/health', (req, res) => {
  * Get all pods in a network
  */
 app.get('/api/pods', async (req, res) => {
-    try {
-        const { network = 'Mumbai' } = req.query;
-        
-        const snapshot = await db.collection('pods')
-            .where('network', '==', network)
-            .get();
+  try {
+    const { network = 'Mumbai' } = req.query;
 
-        const pods = [];
-        snapshot.forEach(doc => {
-            pods.push({ id: doc.id, ...doc.data() });
-        });
+    const snapshot = await db.collection('pods')
+      .where('network', '==', network)
+      .get();
 
-        res.status(200).json({
-            success: true,
-            network,
-            count: pods.length,
-            pods
-        });
-    } catch (error) {
-        console.error('Error fetching pods:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    const pods = [];
+    snapshot.forEach((doc) => {
+      pods.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.status(200).json({
+      success: true,
+      network,
+      count: pods.length,
+      pods,
+    });
+  } catch (error) {
+    console.error('Error fetching pods:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -94,27 +111,27 @@ app.get('/api/pods', async (req, res) => {
  * Get specific pod details
  */
 app.get('/api/pods/:podId', async (req, res) => {
-    try {
-        const { podId } = req.params;
-        const doc = await db.collection('pods').doc(podId).get();
+  try {
+    const { podId } = req.params;
+    const doc = await db.collection('pods').doc(podId).get();
 
-        if (!doc.exists) {
-            return res.status(404).json({
-                success: false,
-                error: 'Pod not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            pod: { id: doc.id, ...doc.data() }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Pod not found',
+      });
     }
+
+    res.status(200).json({
+      success: true,
+      pod: { id: doc.id, ...doc.data() },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -122,27 +139,29 @@ app.get('/api/pods/:podId', async (req, res) => {
  * Update pod location in real-time
  */
 app.post('/api/pods/:podId/location', async (req, res) => {
-    try {
-        const { podId } = req.params;
-        const { lat, lng, status, battery } = req.body;
+  try {
+    const { podId } = req.params;
+    const {
+      lat, lng, status, battery,
+    } = req.body;
 
-        await db.collection('pods').doc(podId).update({
-            position: { lat, lng },
-            status,
-            battery,
-            lastUpdate: new Date()
-        });
+    await db.collection('pods').doc(podId).update({
+      position: { lat, lng },
+      status,
+      battery,
+      lastUpdate: new Date(),
+    });
 
-        res.status(200).json({
-            success: true,
-            message: 'Location updated'
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(200).json({
+      success: true,
+      message: 'Location updated',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // ==================== BOOKING ROUTES ====================
@@ -152,35 +171,37 @@ app.post('/api/pods/:podId/location', async (req, res) => {
  * Create a new booking request
  */
 app.post('/api/bookings', async (req, res) => {
-    try {
-        const { passengerId, origin, destination, podType } = req.body;
+  try {
+    const {
+      passengerId, origin, destination, podType,
+    } = req.body;
 
-        const booking = {
-            passengerId,
-            origin,
-            destination,
-            podType,
-            status: 'requested',
-            createdAt: new Date(),
-            fare: calculateFare(origin, destination),
-            assignedPod: null,
-            startTime: null,
-            endTime: null
-        };
+    const booking = {
+      passengerId,
+      origin,
+      destination,
+      podType,
+      status: 'requested',
+      createdAt: new Date(),
+      fare: calculateFare(origin, destination),
+      assignedPod: null,
+      startTime: null,
+      endTime: null,
+    };
 
-        const docRef = await db.collection('bookings').add(booking);
+    const docRef = await db.collection('bookings').add(booking);
 
-        res.status(201).json({
-            success: true,
-            bookingId: docRef.id,
-            booking: { id: docRef.id, ...booking }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(201).json({
+      success: true,
+      bookingId: docRef.id,
+      booking: { id: docRef.id, ...booking },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -188,27 +209,27 @@ app.post('/api/bookings', async (req, res) => {
  * Get booking status
  */
 app.get('/api/bookings/:bookingId', async (req, res) => {
-    try {
-        const { bookingId } = req.params;
-        const doc = await db.collection('bookings').doc(bookingId).get();
+  try {
+    const { bookingId } = req.params;
+    const doc = await db.collection('bookings').doc(bookingId).get();
 
-        if (!doc.exists) {
-            return res.status(404).json({
-                success: false,
-                error: 'Booking not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            booking: { id: doc.id, ...doc.data() }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Booking not found',
+      });
     }
+
+    res.status(200).json({
+      success: true,
+      booking: { id: doc.id, ...doc.data() },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -216,24 +237,24 @@ app.get('/api/bookings/:bookingId', async (req, res) => {
  * Cancel a booking
  */
 app.put('/api/bookings/:bookingId/cancel', async (req, res) => {
-    try {
-        const { bookingId } = req.params;
-        
-        await db.collection('bookings').doc(bookingId).update({
-            status: 'cancelled',
-            cancelledAt: new Date()
-        });
+  try {
+    const { bookingId } = req.params;
 
-        res.status(200).json({
-            success: true,
-            message: 'Booking cancelled'
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    await db.collection('bookings').doc(bookingId).update({
+      status: 'cancelled',
+      cancelledAt: new Date(),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Booking cancelled',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // ==================== ANALYTICS ROUTES ====================
@@ -243,39 +264,37 @@ app.put('/api/bookings/:bookingId/cancel', async (req, res) => {
  * Get system metrics
  */
 app.get('/api/analytics/metrics', async (req, res) => {
-    try {
-        const { network = 'Mumbai', period = '24h' } = req.query;
+  try {
+    const { network = 'Mumbai', period = '24h' } = req.query;
 
-        // Get metrics for specified period
-        const snapshot = await db.collection('metrics')
-            .where('network', '==', network)
-            .where('timestamp', '>', getTimeAgo(period))
-            .orderBy('timestamp', 'desc')
-            .limit(100)
-            .get();
+    const snapshot = await db.collection('metrics')
+      .where('network', '==', network)
+      .where('timestamp', '>', getTimeAgo(period))
+      .orderBy('timestamp', 'desc')
+      .limit(100)
+      .get();
 
-        const metrics = [];
-        snapshot.forEach(doc => {
-            metrics.push({ id: doc.id, ...doc.data() });
-        });
+    const metrics = [];
+    snapshot.forEach((doc) => {
+      metrics.push({ id: doc.id, ...doc.data() });
+    });
 
-        // Calculate aggregates
-        const aggregates = calculateAggregates(metrics);
+    const aggregates = calculateAggregates(metrics);
 
-        res.status(200).json({
-            success: true,
-            network,
-            period,
-            count: metrics.length,
-            aggregates,
-            metrics: metrics.slice(0, 10) // Return last 10
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(200).json({
+      success: true,
+      network,
+      period,
+      count: metrics.length,
+      aggregates,
+      metrics: metrics.slice(0, 10),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -283,29 +302,31 @@ app.get('/api/analytics/metrics', async (req, res) => {
  * Record a metric
  */
 app.post('/api/analytics/record', async (req, res) => {
-    try {
-        const { network, metricName, value, metadata = {} } = req.body;
+  try {
+    const {
+      network, metricName, value, metadata = {},
+    } = req.body;
 
-        const metric = {
-            network,
-            metricName,
-            value,
-            metadata,
-            timestamp: new Date()
-        };
+    const metric = {
+      network,
+      metricName,
+      value,
+      metadata,
+      timestamp: new Date(),
+    };
 
-        const docRef = await db.collection('metrics').add(metric);
+    const docRef = await db.collection('metrics').add(metric);
 
-        res.status(201).json({
-            success: true,
-            metricId: docRef.id
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(201).json({
+      success: true,
+      metricId: docRef.id,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -313,57 +334,57 @@ app.post('/api/analytics/record', async (req, res) => {
  * Generate report for period
  */
 app.get('/api/analytics/report/:period', async (req, res) => {
-    try {
-        const { period } = req.params;
-        const { network = 'Mumbai' } = req.query;
+  try {
+    const { period } = req.params;
+    const { network = 'Mumbai' } = req.query;
 
-        const snapshot = await db.collection('bookings')
-            .where('network', '==', network)
-            .where('createdAt', '>', getTimeAgo(period))
-            .get();
+    const snapshot = await db.collection('bookings')
+      .where('network', '==', network)
+      .where('createdAt', '>', getTimeAgo(period))
+      .get();
 
-        let totalRevenue = 0;
-        let completedTrips = 0;
-        let cancelledTrips = 0;
-        let totalDistance = 0;
-        let totalDuration = 0;
+    let totalRevenue = 0;
+    let completedTrips = 0;
+    let cancelledTrips = 0;
+    let totalDistance = 0;
+    let totalDuration = 0;
 
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            if (data.status === 'completed') {
-                completedTrips++;
-                totalRevenue += data.fare || 0;
-                totalDistance += data.distance || 0;
-                totalDuration += data.duration || 0;
-            } else if (data.status === 'cancelled') {
-                cancelledTrips++;
-            }
-        });
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      if (data.status === 'completed') {
+        completedTrips += 1;
+        totalRevenue += data.fare || 0;
+        totalDistance += data.distance || 0;
+        totalDuration += data.duration || 0;
+      } else if (data.status === 'cancelled') {
+        cancelledTrips += 1;
+      }
+    });
 
-        const report = {
-            period,
-            network,
-            totalBookings: snapshot.size,
-            completedTrips,
-            cancelledTrips,
-            completionRate: snapshot.size > 0 ? (completedTrips / snapshot.size * 100).toFixed(2) : 0,
-            totalRevenue: totalRevenue.toFixed(2),
-            avgTripFare: completedTrips > 0 ? (totalRevenue / completedTrips).toFixed(2) : 0,
-            avgDistance: completedTrips > 0 ? (totalDistance / completedTrips).toFixed(2) : 0,
-            avgDuration: completedTrips > 0 ? (totalDuration / completedTrips).toFixed(2) : 0,
-            generatedAt: new Date()
-        };
+    const report = {
+      period,
+      network,
+      totalBookings: snapshot.size,
+      completedTrips,
+      cancelledTrips,
+      completionRate: snapshot.size > 0 ? (completedTrips / snapshot.size * 100).toFixed(2) : 0,
+      totalRevenue: totalRevenue.toFixed(2),
+      avgTripFare: completedTrips > 0 ? (totalRevenue / completedTrips).toFixed(2) : 0,
+      avgDistance: completedTrips > 0 ? (totalDistance / completedTrips).toFixed(2) : 0,
+      avgDuration: completedTrips > 0 ? (totalDuration / completedTrips).toFixed(2) : 0,
+      generatedAt: new Date(),
+    };
 
-        res.status(200).json({
-            success: true,
-            report
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(200).json({
+      success: true,
+      report,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // ==================== PASSENGER ROUTES ====================
@@ -373,33 +394,35 @@ app.get('/api/analytics/report/:period', async (req, res) => {
  * Register a new passenger
  */
 app.post('/api/passengers', async (req, res) => {
-    try {
-        const { email, name, phone, paymentMethod } = req.body;
+  try {
+    const {
+      email, name, phone, paymentMethod,
+    } = req.body;
 
-        const passenger = {
-            email,
-            name,
-            phone,
-            paymentMethod,
-            ridesCount: 0,
-            rating: 5.0,
-            joinedAt: new Date(),
-            totalSpent: 0
-        };
+    const passenger = {
+      email,
+      name,
+      phone,
+      paymentMethod,
+      ridesCount: 0,
+      rating: 5.0,
+      joinedAt: new Date(),
+      totalSpent: 0,
+    };
 
-        const docRef = await db.collection('passengers').add(passenger);
+    const docRef = await db.collection('passengers').add(passenger);
 
-        res.status(201).json({
-            success: true,
-            passengerId: docRef.id,
-            passenger: { id: docRef.id, ...passenger }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.status(201).json({
+      success: true,
+      passengerId: docRef.id,
+      passenger: { id: docRef.id, ...passenger },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 /**
@@ -407,84 +430,84 @@ app.post('/api/passengers', async (req, res) => {
  * Get passenger profile
  */
 app.get('/api/passengers/:passengerId', async (req, res) => {
-    try {
-        const { passengerId } = req.params;
-        const doc = await db.collection('passengers').doc(passengerId).get();
+  try {
+    const { passengerId } = req.params;
+    const doc = await db.collection('passengers').doc(passengerId).get();
 
-        if (!doc.exists) {
-            return res.status(404).json({
-                success: false,
-                error: 'Passenger not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            passenger: { id: doc.id, ...doc.data() }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Passenger not found',
+      });
     }
+
+    res.status(200).json({
+      success: true,
+      passenger: { id: doc.id, ...doc.data() },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // ==================== HELPER FUNCTIONS ====================
 
 function calculateFare(origin, destination) {
-    // Simple fare calculation: ₹10 base + ₹8 per km
-    // In production, use actual distance matrix API
-    const basefare = 10;
-    const estimatedDistance = 5; // Default estimate
-    return basefare + (estimatedDistance * 8);
+  // Simple fare calculation: 10 base + 8 per km
+  // In production, use an actual distance matrix API.
+  const baseFare = 10;
+  const estimatedDistance = 5;
+  return baseFare + (estimatedDistance * 8);
 }
 
 function getTimeAgo(period) {
-    const now = new Date();
-    switch(period) {
-        case '1h':
-            return new Date(now.getTime() - 60 * 60 * 1000);
-        case '24h':
-            return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        case '7d':
-            return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        case '30d':
-            return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        default:
-            return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    }
+  const now = new Date();
+  switch (period) {
+    case '1h':
+      return new Date(now.getTime() - 60 * 60 * 1000);
+    case '24h':
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    default:
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  }
 }
 
 function calculateAggregates(metrics) {
-    if (metrics.length === 0) return {};
+  if (metrics.length === 0) return {};
 
-    const values = metrics.map(m => m.value);
-    return {
-        count: metrics.length,
-        latest: values[0],
-        average: (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2),
-        min: Math.min(...values),
-        max: Math.max(...values)
-    };
+  const values = metrics.map((m) => m.value);
+  return {
+    count: metrics.length,
+    latest: values[0],
+    average: (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2),
+    min: Math.min(...values),
+    max: Math.max(...values),
+  };
 }
 
 // ==================== ERROR HANDLING ====================
 
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    res.status(500).json({
-        success: false,
-        error: 'Internal Server Error',
-        message: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+  console.error('Error:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined,
+  });
 });
 
 app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        error: 'Route not found'
-    });
+  res.status(404).json({
+    success: false,
+    error: 'Route not found',
+  });
 });
 
 // ==================== START SERVER ====================
@@ -492,8 +515,8 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
-    console.log(`🚀 Pod Transit API Server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Pod Transit API Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
-module.exports = app;
+export default app;

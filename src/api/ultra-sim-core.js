@@ -24,10 +24,57 @@ const DEFAULTS = {
   maxTripsPerStationPerHour: 300,
   warmupSec: 30 * 60,
   runSec: 2 * 60 * 60,
+  dispatchWeights: {
+    eta: 1.2,
+    battery: 0.9,
+    demand: 1.1,
+    congestion: 1.0,
+  },
+};
+
+const SCENARIO_PRESETS = {
+  peak_hour_surge: {
+    label: 'Peak-hour surge',
+    durationSec: 10 * 60,
+    demandMultiplier: 2.2,
+  },
+  outage: {
+    label: 'Station outage',
+    durationSec: 8 * 60,
+  },
+  blocked_corridor: {
+    label: 'Blocked corridor',
+    durationSec: 6 * 60,
+  },
+  depot_overload: {
+    label: 'Depot overload',
+    durationSec: 12 * 60,
+    chargingRateMultiplier: 0.45,
+  },
 };
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function hashSeed(value) {
+  const text = String(value ?? 'hermes-seed');
+  let h = 1779033703 ^ text.length;
+  for (let i = 0; i < text.length; i++) {
+    h = Math.imul(h ^ text.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return (h >>> 0) || 123456789;
+}
+
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function makeEdgeKey(a, b) {
@@ -35,10 +82,13 @@ function makeEdgeKey(a, b) {
 }
 
 export class UltraSimCore {
-  constructor({ nodes, edges, stationDemand = {}, settings = {} }) {
+  constructor({ nodes, edges, stationDemand = {}, settings = {}, seed = 'hermes-default-seed' }) {
     this.nodes = cloneDeep(nodes);
     this.edges = this.normalizeEdges(cloneDeep(edges));
     this.settings = { ...DEFAULTS, ...settings };
+
+    this.seed = seed;
+    this.random = mulberry32(hashSeed(seed));
 
     this.stationIds = Object.keys(this.nodes).filter(id => this.nodes[id].type === 'station');
     this.depotIds = Object.keys(this.nodes).filter(id => this.nodes[id].type === 'depot');
@@ -55,6 +105,14 @@ export class UltraSimCore {
 
     this.timeSec = 0;
     this.finished = false;
+    this.energyConsumedUnits = 0;
+    this.edgeTraffic = {};
+
+    this.scenarios = [];
+    this.blockedEdges = new Set();
+    this.stationOutages = new Set();
+    this.chargingRateMultiplier = 1;
+    this.activeScenarioName = null;
 
     this.stations = this.stationIds.reduce((acc, stationId) => {
       acc[stationId] = {
@@ -73,7 +131,19 @@ export class UltraSimCore {
     this.nextPassengerId = 1;
     this.log = [];
 
+    this.initialBlueprint = {
+      nodes: cloneDeep(this.nodes),
+      edges: cloneDeep(this.edges),
+      stationDemand: cloneDeep(stationDemand),
+      settings: cloneDeep(this.settings),
+      seed,
+    };
+
     this.initializeFleet();
+  }
+
+  rand() {
+    return this.random();
   }
 
   normalizeEdges(rawEdges = []) {
@@ -125,6 +195,59 @@ export class UltraSimCore {
     return map;
   }
 
+  resetWithSeed(seedOverride = this.seed) {
+    const blueprint = cloneDeep(this.initialBlueprint);
+
+    this.seed = seedOverride;
+    this.random = mulberry32(hashSeed(this.seed));
+    this.nodes = cloneDeep(blueprint.nodes);
+    this.edges = this.normalizeEdges(cloneDeep(blueprint.edges));
+    this.settings = { ...DEFAULTS, ...blueprint.settings };
+
+    this.stationIds = Object.keys(this.nodes).filter(id => this.nodes[id].type === 'station');
+    this.depotIds = Object.keys(this.nodes).filter(id => this.nodes[id].type === 'depot');
+
+    this.adj = this.buildAdjacency();
+    this.edgeDistance = this.buildEdgeDistanceMap();
+
+    this.stationDemand = {};
+    this.stationIds.forEach(id => {
+      this.stationDemand[id] = Number(blueprint.stationDemand[id] || 1);
+    });
+    this.odMatrix = this.generateGravityODMatrix();
+
+    this.timeSec = 0;
+    this.finished = false;
+    this.energyConsumedUnits = 0;
+    this.edgeTraffic = {};
+
+    this.scenarios = [];
+    this.blockedEdges = new Set();
+    this.stationOutages = new Set();
+    this.chargingRateMultiplier = 1;
+    this.activeScenarioName = null;
+
+    this.stations = this.stationIds.reduce((acc, stationId) => {
+      acc[stationId] = {
+        queue: [],
+        berths: this.settings.stationBerths,
+        waitingNow: 0,
+        nextPlatform: 1,
+        servedGroups: 0,
+        totalWaitSec: 0,
+        under60Sec: 0,
+      };
+      return acc;
+    }, {});
+
+    this.vehicles = [];
+    this.nextPassengerId = 1;
+    this.log = [];
+    this.initializeFleet();
+
+    return this.getSnapshot();
+  }
+
   validateNetwork() {
     const errors = [];
 
@@ -142,7 +265,7 @@ export class UltraSimCore {
     });
 
     if (!stationReachability) {
-      errors.push('Not all stations are reachable from each other via directed guideway.');
+      errors.push('Not all stations are reachable from each other via the current network links.');
     }
 
     return {
@@ -158,6 +281,7 @@ export class UltraSimCore {
     while (queue.length > 0) {
       const current = queue.shift();
       (this.adj[current] || []).forEach(next => {
+        if (this.isEdgeBlocked(current, next)) return;
         if (!visited.has(next)) {
           visited.add(next);
           queue.push(next);
@@ -249,7 +373,7 @@ export class UltraSimCore {
       this.vehicles.push(this.createVehicle({
         id,
         node: home,
-        battery: 100 - (Math.random() * 20),
+        battery: 100 - (this.rand() * 20),
       }));
     }
   }
@@ -273,6 +397,96 @@ export class UltraSimCore {
       direction: 'next',
       selectedRoute: [],
     };
+  }
+
+  applyScenario(name, options = {}) {
+    const preset = SCENARIO_PRESETS[name];
+    if (!preset) return { ok: false, message: 'Unknown scenario.' };
+
+    const mergedOptions = { ...preset, ...options };
+    const scenario = {
+      name,
+      startedAt: this.timeSec,
+      endsAt: this.timeSec + Number(mergedOptions.durationSec || preset.durationSec),
+      options: mergedOptions,
+    };
+
+    this.scenarios.push(scenario);
+    this.activeScenarioName = scenario.name;
+
+    if (name === 'outage') {
+      const stationId = mergedOptions.stationId || this.stationIds[Math.floor(this.rand() * this.stationIds.length)];
+      if (stationId) {
+        scenario.options.stationId = stationId;
+        this.stationOutages.add(stationId);
+      }
+      this.log.push({ t: this.timeSec, type: 'scenario_outage', stationId, untilSec: scenario.endsAt });
+    }
+
+    if (name === 'blocked_corridor') {
+      const selectedEdge = mergedOptions.edge || this.edges[Math.floor(this.rand() * this.edges.length)];
+      if (selectedEdge?.from && selectedEdge?.to) {
+        scenario.options.edge = selectedEdge;
+        this.blockedEdges.add(makeEdgeKey(selectedEdge.from, selectedEdge.to));
+        this.blockedEdges.add(makeEdgeKey(selectedEdge.to, selectedEdge.from));
+        this.log.push({ t: this.timeSec, type: 'scenario_blocked_corridor', from: selectedEdge.from, to: selectedEdge.to, untilSec: scenario.endsAt });
+      }
+    }
+
+    if (name === 'peak_hour_surge') {
+      this.log.push({ t: this.timeSec, type: 'scenario_peak_hour_surge', multiplier: mergedOptions.demandMultiplier, untilSec: scenario.endsAt });
+    }
+
+    if (name === 'depot_overload') {
+      this.chargingRateMultiplier = Number(mergedOptions.chargingRateMultiplier || 0.45);
+      this.log.push({ t: this.timeSec, type: 'scenario_depot_overload', rateMultiplier: this.chargingRateMultiplier, untilSec: scenario.endsAt });
+    }
+
+    return { ok: true, scenario };
+  }
+
+  injectDisruption(type, payload = {}) {
+    return this.applyScenario(type, payload);
+  }
+
+  clearExpiredScenarios() {
+    const active = this.scenarios.filter(s => s.endsAt > this.timeSec);
+    const expired = this.scenarios.filter(s => s.endsAt <= this.timeSec);
+    this.scenarios = active;
+
+    if (expired.length > 0) {
+      const activeOutages = active.filter(s => s.name === 'outage').map(s => s.options.stationId).filter(Boolean);
+      this.stationOutages = new Set(activeOutages);
+
+      const blocked = new Set();
+      active.filter(s => s.name === 'blocked_corridor').forEach(s => {
+        const edge = s.options.edge;
+        if (edge?.from && edge?.to) {
+          blocked.add(makeEdgeKey(edge.from, edge.to));
+          blocked.add(makeEdgeKey(edge.to, edge.from));
+        }
+      });
+      this.blockedEdges = blocked;
+
+      const overload = active.find(s => s.name === 'depot_overload');
+      this.chargingRateMultiplier = overload ? Number(overload.options.chargingRateMultiplier || 0.45) : 1;
+
+      expired.forEach(s => {
+        this.log.push({ t: this.timeSec, type: 'scenario_ended', scenario: s.name });
+      });
+    }
+
+    this.activeScenarioName = active.length > 0 ? active[active.length - 1].name : null;
+  }
+
+  getDemandMultiplier() {
+    const surge = this.scenarios.find(s => s.name === 'peak_hour_surge');
+    return surge ? Number(surge.options.demandMultiplier || 1) : 1;
+  }
+
+  isEdgeBlocked(from, to) {
+    if (!this.blockedEdges) return false;
+    return this.blockedEdges.has(makeEdgeKey(from, to));
   }
 
   addVehicleAtDepot({ vehicleId, depotId, battery = 95 }) {
@@ -386,6 +600,7 @@ export class UltraSimCore {
       unvisited.delete(current);
 
       (this.adj[current] || []).forEach(next => {
+        if (this.isEdgeBlocked(current, next)) return;
         if (!unvisited.has(next)) return;
         const d = this.edgeDistance[makeEdgeKey(current, next)] || 1;
         const alt = dist[current] + d;
@@ -408,19 +623,48 @@ export class UltraSimCore {
     return path;
   }
 
+  edgeCongestionScore(path = []) {
+    if (!Array.isArray(path) || path.length < 2) return 0;
+    let total = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      total += this.edgeTraffic[makeEdgeKey(path[i], path[i + 1])] || 0;
+    }
+    return total / Math.max(1, path.length - 1);
+  }
+
+  scoreVehicleForStation(vehicle, stationId, path) {
+    if (!path || path.length < 2) return -Infinity;
+
+    const queueLen = this.stations[stationId]?.queue?.length || 0;
+    const demandSignal = (this.stationDemand[stationId] || 1) + queueLen;
+
+    let etaSec = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      etaSec += (this.edgeDistance[makeEdgeKey(path[i], path[i + 1])] || 100) / Math.max(1, this.settings.vehicleSpeedMps);
+    }
+
+    const congestion = this.edgeCongestionScore(path);
+    const batteryNorm = Math.max(0, Math.min(1, Number(vehicle.battery || 0) / 100));
+    const w = this.settings.dispatchWeights || DEFAULTS.dispatchWeights;
+
+    return (w.demand * demandSignal)
+      + (w.battery * batteryNorm * 10)
+      - (w.eta * etaSec / 10)
+      - (w.congestion * congestion * 1.5);
+  }
+
   assignVehicleToStation(stationId) {
-    // Pick nearest red vehicle at another node and send it empty to this station.
     let bestVehicle = null;
-    let bestCost = Infinity;
+    let bestScore = -Infinity;
 
     this.vehicles.forEach(vehicle => {
       if (vehicle.state !== 'idle_empty' || vehicle.node === stationId) return;
       if (vehicle.purpose === 'charge') return;
       const path = this.shortestPath(vehicle.node, stationId);
       if (path.length < 2) return;
-      const hopCost = path.length;
-      if (hopCost < bestCost) {
-        bestCost = hopCost;
+      const score = this.scoreVehicleForStation(vehicle, stationId, path);
+      if (score > bestScore) {
+        bestScore = score;
         bestVehicle = { vehicle, path };
       }
     });
@@ -442,29 +686,25 @@ export class UltraSimCore {
   findNearestWaitingStationForVehicle(vehicle) {
     let bestStationId = null;
     let bestPath = null;
-    let bestDistance = Infinity;
+    let bestScore = -Infinity;
 
     this.stationIds.forEach(stationId => {
       const station = this.stations[stationId];
       if (!station || station.queue.length === 0) return;
+      if (this.stationOutages.has(stationId)) return;
 
       if (vehicle.node === stationId) {
         bestStationId = stationId;
         bestPath = [stationId];
-        bestDistance = 0;
+        bestScore = Infinity;
         return;
       }
 
       const path = this.shortestPath(vehicle.node, stationId);
       if (path.length < 2) return;
-
-      let distance = 0;
-      for (let i = 0; i < path.length - 1; i++) {
-        distance += this.edgeDistance[makeEdgeKey(path[i], path[i + 1])] || 1;
-      }
-
-      if (distance < bestDistance) {
-        bestDistance = distance;
+      const score = this.scoreVehicleForStation(vehicle, stationId, path);
+      if (score > bestScore) {
+        bestScore = score;
         bestStationId = stationId;
         bestPath = path;
       }
@@ -474,7 +714,7 @@ export class UltraSimCore {
     return {
       stationId: bestStationId,
       path: bestPath,
-      distance: bestDistance,
+      distance: bestScore,
     };
   }
 
@@ -515,21 +755,23 @@ export class UltraSimCore {
   }
 
   generatePassengerArrivals(dtSec) {
+    const demandMultiplier = this.getDemandMultiplier();
     this.stationIds.forEach(origin => {
       this.stationIds.forEach(dest => {
         if (origin === dest) return;
-        const tripsPerHour = this.odMatrix[origin][dest] || 0;
-        const expected = (tripsPerHour / 3600) * dtSec;
+        if (this.stationOutages.has(origin) || this.stationOutages.has(dest)) return;
 
-        // Bernoulli approximation for short timesteps.
-        if (Math.random() < expected) {
+        const tripsPerHour = this.odMatrix[origin][dest] || 0;
+        const expected = (tripsPerHour / 3600) * dtSec * demandMultiplier;
+
+        if (this.rand() < expected) {
           const station = this.stations[origin];
           station.queue.push({
             id: `G${this.nextPassengerId++}`,
             origin,
             dest,
             arrivalSec: this.timeSec,
-            groupSize: 1 + Math.floor(Math.random() * this.settings.maxPassengersPerPod),
+            groupSize: 1 + Math.floor(this.rand() * this.settings.maxPassengersPerPod),
           });
         }
       });
@@ -538,6 +780,8 @@ export class UltraSimCore {
 
   processStations() {
     this.stationIds.forEach(stationId => {
+      if (this.stationOutages.has(stationId)) return;
+
       const station = this.stations[stationId];
       station.waitingNow = station.queue.length;
 
@@ -550,11 +794,12 @@ export class UltraSimCore {
   }
 
   updateVehicles(dtSec) {
+    this.edgeTraffic = {};
+
     this.vehicles.forEach(vehicle => {
       const isMoving = vehicle.state === 'moving_loaded' || vehicle.state === 'repositioning';
       const onDepot = this.nodes[vehicle.node]?.type === 'depot';
 
-      // Transition to charging when arriving at depot for low-battery
       if ((vehicle.state === 'repositioning' || vehicle.state === 'idle_empty') && onDepot && vehicle.purpose === 'charge') {
         vehicle.state = 'charging';
         this.log.push({
@@ -571,11 +816,13 @@ export class UltraSimCore {
 
       if (shouldChargeOnDepot) {
         vehicle.state = 'charging';
-        vehicle.battery = Math.min(100, vehicle.battery + 1.2 * dtSec);
+        vehicle.battery = Math.min(100, vehicle.battery + (1.2 * this.chargingRateMultiplier * dtSec));
       } else {
-        vehicle.battery -= (isMoving ? 0.06 * dtSec : 0.015 * dtSec);
-        if (vehicle.battery < 0) vehicle.battery = 0;
+        const batteryDrain = isMoving ? 0.06 * dtSec : 0.015 * dtSec;
+        vehicle.battery -= batteryDrain;
+        this.energyConsumedUnits += batteryDrain;
 
+        if (vehicle.battery < 0) vehicle.battery = 0;
         if (vehicle.purpose === 'charge' && isMoving && vehicle.battery < 1) {
           vehicle.battery = 1;
         }
@@ -728,6 +975,11 @@ export class UltraSimCore {
         }
 
         vehicle.edgeProgressSec += dtSec;
+        if (vehicle.nextNode) {
+          const key = makeEdgeKey(vehicle.node, vehicle.nextNode);
+          this.edgeTraffic[key] = (this.edgeTraffic[key] || 0) + 1;
+        }
+
         if (vehicle.edgeProgressSec >= vehicle.edgeTravelSec) {
           vehicle.node = vehicle.nextNode;
           vehicle.nextNode = null;
@@ -756,6 +1008,7 @@ export class UltraSimCore {
   step(dtSec = 1) {
     if (this.finished) return this.getSnapshot();
 
+    this.clearExpiredScenarios();
     this.timeSec += dtSec;
     this.generatePassengerArrivals(dtSec);
     this.processStations();
@@ -783,6 +1036,27 @@ export class UltraSimCore {
     return this.getResults();
   }
 
+  getRunReport() {
+    const results = this.getResults();
+    const activeVehicles = this.vehicles.filter(v => ['moving_loaded', 'repositioning', 'boarding', 'approaching_platform', 'docking', 'unloading'].includes(v.state)).length;
+    const utilizationPct = this.vehicles.length > 0 ? (100 * activeVehicles) / this.vehicles.length : 0;
+    const congestionIndex = Object.values(this.edgeTraffic).length > 0
+      ? Object.values(this.edgeTraffic).reduce((a, b) => a + b, 0) / Object.values(this.edgeTraffic).length
+      : 0;
+
+    return {
+      seed: this.seed,
+      elapsedSec: results.elapsedSec,
+      servedGroups: results.totalServedGroups,
+      meanWaitSec: results.overallMeanWaitSec,
+      utilizationPct: Number(utilizationPct.toFixed(2)),
+      energyUnits: Number(this.energyConsumedUnits.toFixed(2)),
+      reliabilityPct: Number(results.overallUnder60Pct.toFixed(2)),
+      congestionIndex: Number(congestionIndex.toFixed(2)),
+      activeDisruptions: this.scenarios.map(s => s.name),
+    };
+  }
+
   getSnapshot() {
     const vehicleCounts = this.vehicles.reduce((acc, v) => {
       const key = this.stateToColor(v.state);
@@ -793,12 +1067,18 @@ export class UltraSimCore {
     return {
       timeSec: this.timeSec,
       finished: this.finished,
+      seed: this.seed,
+      scenarioName: this.activeScenarioName,
+      activeDisruptions: this.scenarios.map(s => ({ name: s.name, endsAt: s.endsAt, options: s.options })),
       waitingByStation: Object.fromEntries(this.stationIds.map(id => [id, this.stations[id].queue.length])),
       depotIds: this.depotIds,
       stationPlatforms: Object.fromEntries(this.stationIds.map(id => [id, this.stations[id].berths])),
       vehicleCounts,
       vehicles: this.vehicles,
-      recentEvents: this.log.slice(-40),
+      edgeTraffic: this.edgeTraffic,
+      energyConsumedUnits: Number(this.energyConsumedUnits.toFixed(2)),
+      report: this.getRunReport(),
+      recentEvents: this.log.slice(-80),
     };
   }
 
@@ -834,6 +1114,7 @@ export class UltraSimCore {
       overallMeanWaitSec: totalServed > 0 ? Number((totalWait / totalServed).toFixed(2)) : 0,
       overallUnder60Pct: totalServed > 0 ? Number(((100 * totalUnder60) / totalServed).toFixed(2)) : 0,
       vehiclesUsed: this.vehicles.length,
+      energyConsumedUnits: Number(this.energyConsumedUnits.toFixed(2)),
       stationSummary,
       validation: this.validateNetwork(),
     };

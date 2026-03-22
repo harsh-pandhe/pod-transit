@@ -11,7 +11,7 @@
     "server": "node src/api/app.js",
     "both": "concurrently \"npm run server\" \"npm run dev\"",
     "desktop": "cross-env NODE_ENV=development concurrently \"bun run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "test": "echo 'Tests not configured yet'",
+    "test": "node --test tests/*.test.js",
     "deploy": "gcloud run deploy pod-transit --source . --platform managed --region asia-south1 --allow-unauthenticated"
   },
   "keywords": [
