@@ -1309,13 +1309,35 @@ export default function App() {
           </div>
         )}
 
-      <div className="future-statusbar h-6 border-t flex items-center px-4 text-[10px] font-semibold justify-between z-10">
-        <div>
-          {simMode === 'edit'
-            ? `EDIT MODE | Tool: ${mode.toUpperCase()} | Nodes: ${Object.keys(nodes).length} | Corridors: ${uniqueCorridorCount} (2-way)`
-            : `SIMULATION RUNNING${report ? ` | Seed ${report.seed}` : ''} | Speed ${simSpeedMps.toFixed(1)}m/s`}
+      <div className="future-statusbar h-8 border-t bg-gradient-to-r from-slate-100 to-blue-50 flex items-center px-4 text-[12px] font-semibold justify-between z-10 text-slate-800 shadow-sm">
+        <div className="flex items-center gap-3">
+          {simMode === 'edit' ? (
+            <>
+              <span className="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold text-[10px] tracking-wider">🎨 DESIGN</span>
+              <div className="flex items-center gap-2.5 text-slate-700">
+                <span className="text-slate-500">Tool:</span>
+                <span className="font-mono bg-blue-100 text-blue-900 px-2 py-0.5 rounded">{mode.toUpperCase().replace('_', ' ')}</span>
+              </div>
+              <span className="text-slate-400">|</span>
+              <span className="text-slate-600">{Object.keys(nodes).length} <span className="text-slate-500 text-[10px]">nodes</span></span>
+              <span className="text-slate-400">|</span>
+              <span className="text-slate-600">{uniqueCorridorCount} <span className="text-slate-500 text-[10px]">links</span></span>
+            </>
+          ) : (
+            <>
+              <span className="px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[10px] tracking-wider">▶ RUNNING</span>
+              <span className="text-slate-700">Speed: <span className="font-mono bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded">{simSpeedMps.toFixed(1)} m/s</span></span>
+              {report && <span className="text-slate-400">• Seed: <span className="font-mono">{report.seed.substring(0, 8)}</span></span>}
+            </>
+          )}
         </div>
-        {simMode === 'play' && <div>Wait Avg: {simCore.current?.getResults()?.overallMeanWaitSec}s | Serviced: {simCore.current?.getResults()?.totalServedGroups}</div>}
+        {simMode === 'play' && simCore.current && (
+          <div className="flex items-center gap-3 text-slate-700">
+            <span>⏱️ Wait: <span className="font-bold">{simCore.current?.getResults()?.overallMeanWaitSec || 0}s</span></span>
+            <span>|</span>
+            <span>✅ Served: <span className="font-bold">{simCore.current?.getResults()?.totalServedGroups || 0}</span></span>
+          </div>
+        )}
       </div>
       </div>
 
