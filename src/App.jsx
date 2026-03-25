@@ -1309,19 +1309,16 @@ export default function App() {
           </div>
         )}
 
+      </div>
+
       <div className="future-statusbar h-10 border-t bg-gradient-to-r from-slate-100 to-blue-50 flex items-center px-4 text-[11px] font-semibold justify-between z-10 text-slate-800 shadow-sm">
         <div className="flex items-center gap-4">
           {simMode === 'edit' ? (
             <>
               <div className="flex items-center gap-3">
-                <span className="px-2.5 py-1 rounded-lg bg-blue-600 text-white font-bold text-[10px] tracking-wider">DESIGN</span>
-                <span className="text-slate-500">|</span>
-                <span className="text-slate-600 font-mono">{mode.replace('_', ' ')}</span>
+                <span className="px-2.5 py-1 rounded-lg bg-blue-600 text-white font-bold text-[10px] tracking-wider">DESIGN MODE</span>
+                <span className="text-slate-600">Use toolbar to add/edit stations and links</span>
               </div>
-              <span className="text-slate-300">•</span>
-              <span className="text-slate-600">{Object.keys(nodes).length} nodes</span>
-              <span className="text-slate-300">•</span>
-              <span className="text-slate-600">{uniqueCorridorCount} links</span>
             </>
           ) : (
             <>
@@ -1344,7 +1341,6 @@ export default function App() {
             <span>✅ Served: <span className="font-bold">{simCore.current?.getResults()?.totalServedGroups || 0}</span></span>
           </div>
         )}
-      </div>
       </div>
 
       {detailedStation && (
