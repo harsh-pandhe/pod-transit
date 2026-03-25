@@ -5,13 +5,13 @@
 @tailwind utilities;
 
 :root {
-  --app-bg-a: #020617;
-  --app-bg-b: #0b1229;
-  --app-bg-c: #111b38;
-  --ink: #e2e8f0;
-  --neon-cyan: #22d3ee;
-  --neon-blue: #3b82f6;
-  --neon-emerald: #10b981;
+  --app-bg-a: #f8fbff;
+  --app-bg-b: #eef6ff;
+  --app-bg-c: #e9f2fb;
+  --ink: #0f172a;
+  --brand-cyan: #0891b2;
+  --brand-blue: #2563eb;
+  --brand-emerald: #059669;
 }
 
 * {
@@ -23,8 +23,8 @@ body {
   font-family: 'Manrope', 'Segoe UI', sans-serif;
   color: var(--ink);
   background:
-    radial-gradient(900px 500px at 8% -10%, rgba(34, 211, 238, 0.2), transparent),
-    radial-gradient(900px 500px at 100% 0%, rgba(59, 130, 246, 0.15), transparent),
+    radial-gradient(900px 500px at 8% -10%, rgba(8, 145, 178, 0.18), transparent),
+    radial-gradient(900px 500px at 100% 0%, rgba(37, 99, 235, 0.16), transparent),
     linear-gradient(180deg, var(--app-bg-a), var(--app-bg-b) 45%, var(--app-bg-c));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -47,27 +47,36 @@ body {
 }
 
 .future-titlebar {
-  color: #dbeafe;
-  border-bottom: 1px solid rgba(34, 211, 238, 0.25);
-  background: linear-gradient(90deg, rgba(8, 47, 73, 0.9), rgba(12, 74, 110, 0.72), rgba(15, 23, 42, 0.85));
+  color: #e2f3ff;
+  border-bottom: 1px solid rgba(8, 145, 178, 0.25);
+  background: linear-gradient(90deg, #0b3555, #11547e 50%, #0d3d63);
   letter-spacing: 0.02em;
 }
 
 .future-toolbar {
-  border-color: rgba(56, 189, 248, 0.2);
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.72));
-  color: #cbd5e1;
+  border-color: rgba(8, 145, 178, 0.22);
+  background: linear-gradient(180deg, rgba(8, 51, 84, 0.96), rgba(9, 43, 70, 0.95));
+  color: #d8ebff;
 }
 
 .future-main {
-  background: radial-gradient(1000px 500px at 20% -20%, rgba(37, 99, 235, 0.18), transparent), #020617;
+  background: radial-gradient(900px 450px at 15% -18%, rgba(8, 145, 178, 0.16), transparent), #edf5ff;
 }
 
 .future-sidebar {
-  border-color: rgba(45, 212, 191, 0.22);
-  background: linear-gradient(180deg, rgba(2, 6, 23, 0.92), rgba(15, 23, 42, 0.9));
+  border-color: rgba(8, 145, 178, 0.22);
+  background: linear-gradient(180deg, #f8fcff, #f1f8ff);
   backdrop-filter: blur(10px);
-  color: #cbd5e1;
+  color: #0f172a;
+  box-shadow: -18px 0 45px -30px rgba(15, 23, 42, 0.18);
+}
+
+@media (max-width: 1023px) {
+  .future-sidebar {
+    border-left-width: 2px;
+    border-left-color: rgba(34, 211, 238, 0.45);
+    box-shadow: -20px 0 40px -20px rgba(15, 23, 42, 0.95);
+  }
 }
 
 .future-sidebar .bg-white,
@@ -77,37 +86,37 @@ body {
 .future-sidebar .bg-slate-700,
 .future-sidebar .bg-slate-800\/60,
 .future-sidebar .bg-slate-900\/70 {
-  background-color: rgba(15, 23, 42, 0.65) !important;
+  background-color: #ffffff !important;
 }
 
 .future-sidebar .border-slate-200,
 .future-sidebar .border-slate-300,
 .future-sidebar .border-slate-700 {
-  border-color: rgba(51, 65, 85, 0.8) !important;
+  border-color: rgba(148, 163, 184, 0.45) !important;
 }
 
 .future-sidebar .text-slate-700,
 .future-sidebar .text-slate-600,
 .future-sidebar .text-slate-500,
 .future-sidebar .text-slate-400 {
-  color: #93c5fd !important;
+  color: #334155 !important;
 }
 
 .future-sidebar input,
 .future-sidebar select {
-  color: #e0f2fe;
-  border-color: rgba(34, 211, 238, 0.28);
-  background: rgba(15, 23, 42, 0.72);
+  color: #0f172a;
+  border-color: rgba(148, 163, 184, 0.5);
+  background: #ffffff;
 }
 
 .future-sidebar button {
-  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.22), 0 10px 16px -12px rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.25), 0 12px 18px -14px rgba(15, 23, 42, 0.25);
 }
 
 .future-tool-btn {
-  color: #93c5fd;
-  border: 1px solid rgba(30, 64, 175, 0.25);
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.7));
+  color: #d8ebff;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  background: linear-gradient(180deg, rgba(10, 58, 94, 0.95), rgba(9, 43, 70, 0.92));
 }
 
 .future-tool-btn:hover {
@@ -125,9 +134,9 @@ body {
 }
 
 .future-statusbar {
-  color: #93c5fd;
-  border-color: rgba(34, 211, 238, 0.2);
-  background: linear-gradient(90deg, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.72));
+  color: #d8ebff;
+  border-color: rgba(56, 189, 248, 0.22);
+  background: linear-gradient(90deg, rgba(8, 51, 84, 0.98), rgba(9, 43, 70, 0.96));
 }
 
 @keyframes fade-in {

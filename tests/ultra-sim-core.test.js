@@ -23,7 +23,7 @@ function createCore() {
       warmupSec: 1,
       runSec: 30,
       chargingReleaseThreshold: 100,
-      lowBatteryThreshold: 20,
+      lowBatteryThreshold: 30,
     },
   });
 }
@@ -70,10 +70,10 @@ test('idle vehicle dispatches to nearest waiting station', () => {
   assert.ok(core.log.some((event) => event.type === 'dispatch_nearest_waiting_group'));
 });
 
-test('low battery vehicle routes to depot for charging', () => {
+test('vehicle below 30% battery routes to depot for charging', () => {
   const core = createCore();
   core.vehicles = [
-    core.createVehicle({ id: 'V002', node: 'Station A', battery: 10 }),
+    core.createVehicle({ id: 'V002', node: 'Station A', battery: 25 }),
   ];
 
   core.updateVehicles(1);
@@ -83,6 +83,42 @@ test('low battery vehicle routes to depot for charging', () => {
   assert.equal(vehicle.state, 'repositioning');
   assert.ok(vehicle.selectedRoute.includes('Depot 1'));
   assert.ok(core.log.some((event) => event.type === 'low_battery_route_to_depot'));
+});
+
+test('station ready pool dispatch keeps pods staged', () => {
+  const core = new UltraSimCore({
+    nodes: {
+      'Station A': { name: 'Station A', type: 'station', x: 0, y: 0 },
+      'Station B': { name: 'Station B', type: 'station', x: 80, y: 0 },
+      'Depot 1': { name: 'Depot 1', type: 'depot', x: 40, y: 50 },
+    },
+    edges: [
+      { from: 'Station A', to: 'Station B', curve: 0 },
+      { from: 'Station B', to: 'Station A', curve: 0 },
+      { from: 'Depot 1', to: 'Station A', curve: 0 },
+      { from: 'Station A', to: 'Depot 1', curve: 0 },
+      { from: 'Depot 1', to: 'Station B', curve: 0 },
+      { from: 'Station B', to: 'Depot 1', curve: 0 },
+    ],
+    stationDemand: { 'Station A': 0, 'Station B': 0 },
+    settings: {
+      lowBatteryThreshold: 30,
+      minReadyPodsPerStation: 2,
+      warmupSec: 1,
+      runSec: 30,
+    },
+  });
+
+  core.vehicles = [
+    core.createVehicle({ id: 'V010', node: 'Depot 1', battery: 90 }),
+    core.createVehicle({ id: 'V011', node: 'Station A', battery: 92 }),
+    core.createVehicle({ id: 'V012', node: 'Station B', battery: 88 }),
+  ];
+
+  core.processStations();
+
+  assert.ok(core.log.some((event) => event.type === 'dispatch_station_ready_pool'));
+  assert.ok(core.vehicles.some((v) => v.purpose === 'staging' && v.state === 'repositioning'));
 });
 
 test('charging vehicle releases only after reaching threshold', () => {
@@ -102,6 +138,46 @@ test('charging vehicle releases only after reaching threshold', () => {
   assert.equal(vehicle.purpose, null);
   assert.ok(vehicle.battery >= 100);
   assert.ok(core.log.some((event) => event.type === 'charging_complete'));
+});
+
+test('depot pod can depart and serve groups after dispatch', () => {
+  const nodes = {
+    'Station A': { name: 'Station A', type: 'station', x: 0, y: 0 },
+    'Station B': { name: 'Station B', type: 'station', x: 300, y: 0 },
+    'Depot 1': { name: 'Depot 1', type: 'depot', x: 300, y: -180 },
+  };
+  const edges = [
+    { from: 'Station A', to: 'Station B', curve: 0 },
+    { from: 'Station B', to: 'Station A', curve: 0 },
+    { from: 'Depot 1', to: 'Station B', curve: 0 },
+    { from: 'Station B', to: 'Depot 1', curve: 0 },
+  ];
+
+  const core = new UltraSimCore({
+    nodes,
+    edges,
+    seed: 'DEPOT-DISPATCH-TEST',
+    stationDemand: { 'Station A': 0, 'Station B': 20 },
+    settings: {
+      vehicleSpeedMps: 15,
+      warmupSec: 0,
+      runSec: 1200,
+      chargingReleaseThreshold: 100,
+      lowBatteryThreshold: 30,
+    },
+  });
+
+  const added = core.addVehicleAtDepot({ vehicleId: 'POD-1', depotId: 'Depot 1', battery: 100 });
+  assert.equal(added.ok, true);
+
+  for (let i = 0; i < 6000; i++) {
+    core.step(0.15);
+  }
+
+  const results = core.getResults();
+  assert.ok(results.totalServedGroups > 0);
+  assert.ok(core.log.some((event) => event.type === 'boarding_started'));
+  assert.ok(core.log.some((event) => event.type === 'depart_station'));
 });
 
 test('deterministic seed produces reproducible first steps', () => {

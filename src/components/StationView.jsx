@@ -21,6 +21,14 @@ export default function StationView({ stationId, snapshot, onClose }) {
 
   const nextLanePods = inboundPods.filter(vehicle => vehicle.direction === 'next');
   const prevLanePods = inboundPods.filter(vehicle => vehicle.direction !== 'next');
+  const stationEvents = (snapshot.recentEvents || [])
+    .filter(event => {
+      if (event.stationId === stationId || event.from === stationId || event.to === stationId) return true;
+      if (!event.vehicleId) return false;
+      return localVehicles.some(vehicle => vehicle.id === event.vehicleId);
+    })
+    .slice(-8)
+    .reverse();
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-8">
@@ -105,6 +113,22 @@ export default function StationView({ stationId, snapshot, onClose }) {
 
             <h3 className="text-xs font-bold text-slate-400 uppercase mb-4">Pod Actions</h3>
             <div className="space-y-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-xl p-3">
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-2">Station Decision Feed</h4>
+                <div className="max-h-28 overflow-y-auto space-y-1">
+                  {stationEvents.length === 0 && <div className="text-[11px] text-slate-500">No local dispatch/docking events yet.</div>}
+                  {stationEvents.map((event, index) => {
+                    const mm = Math.floor((event.t || 0) / 60).toString().padStart(2, '0');
+                    const ss = Math.floor((event.t || 0) % 60).toString().padStart(2, '0');
+                    return (
+                      <div key={`${event.type}-${event.vehicleId || 'na'}-${event.t}-${index}`} className="text-[10px] text-slate-200 bg-slate-800 rounded px-2 py-1">
+                        [{mm}:{ss}] {(event.type || 'event').replaceAll('_', ' ')} {event.vehicleId ? `| ${event.vehicleId}` : ''}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {localVehicles.length === 0 && <div className="text-sm text-slate-500 italic">No pods currently around this station.</div>}
 
               {localVehicles.map(vehicle => (
@@ -119,7 +143,7 @@ export default function StationView({ stationId, snapshot, onClose }) {
 
                   <div className="grid grid-cols-2 gap-2 mb-3">
                     <div className="bg-slate-900/50 p-2 rounded-lg flex items-center">
-                      <Battery size={15} className={vehicle.battery < 20 ? 'text-red-400 mr-2' : vehicle.battery < 50 ? 'text-amber-400 mr-2' : 'text-emerald-400 mr-2'} />
+                      <Battery size={15} className={vehicle.battery < 30 ? 'text-red-400 mr-2' : vehicle.battery < 50 ? 'text-amber-400 mr-2' : 'text-emerald-400 mr-2'} />
                       <div>
                         <div className="text-sm text-white font-mono">{vehicle.battery.toFixed(1)}%</div>
                         <div className="text-[9px] text-slate-500">Battery</div>

@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   Play, Pause, FastForward, Save, FolderOpen, RefreshCcw,
-  MousePointer2, PlusCircle, Building2, Link2, Upload, Database, Plus, X, FileDown, FileUp, Repeat, BarChart3
+  MousePointer2, PlusCircle, Building2, Link2, Upload, Database, Plus, X, FileDown, FileUp, Repeat, BarChart3,
+  Train, PanelRightOpen, PanelRightClose, Gauge
 } from 'lucide-react';
 import { UltraSimCore } from './api/ultra-sim-core.js';
 import StationView from './components/StationView.jsx';
@@ -11,6 +12,57 @@ import { exportRunCsv, exportBoardPdfLike } from './api/report-exporter.js';
 
 const SIM_STEP_SECONDS = 0.15;
 const DEFAULT_CURVE = 36;
+const LOW_BATTERY_THRESHOLD_PCT = 30;
+const MIN_POD_SPEED_MPS = 5;
+const MAX_POD_SPEED_MPS = 30;
+const TIMELINE_EVENT_TYPES = new Set([
+  'scenario_ended',
+  'scenario_blocked_corridor',
+  'scenario_outage',
+  'charging_complete',
+  'dispatch_nearest_waiting_group',
+  'dispatch_station_ready_pool',
+  'arrived_platform',
+  'boarding_started',
+  'depart_station',
+  'low_battery_route_to_depot',
+]);
+
+function eventCategory(type = '') {
+  if (type.includes('scenario') || type.includes('disruption') || type.includes('blocked') || type.includes('outage')) return 'scenario';
+  if (type.includes('battery') || type.includes('charging')) return 'battery';
+  if (type.includes('boarding') || type.includes('depart') || type.includes('arrived') || type.includes('path_selected')) return 'passenger';
+  if (type.includes('dispatch') || type.includes('manual_add_pod')) return 'dispatch';
+  return 'system';
+}
+
+function eventSummary(event) {
+  const type = event?.type || 'event';
+  const vehicle = event?.vehicleId ? ` ${event.vehicleId}` : '';
+
+  switch (type) {
+    case 'manual_add_pod':
+      return `Pod${vehicle} added at ${event.depotId}`;
+    case 'dispatch_nearest_waiting_group':
+      return `Dispatch${vehicle} to ${event.stationId} (nearest waiting group)`;
+    case 'dispatch_station_ready_pool':
+      return `Stage${vehicle} at ${event.stationId} (ready pool)`;
+    case 'boarding_started':
+      return `Boarding${vehicle} at ${event.stationId} to ${event.destination}`;
+    case 'arrived_platform':
+      return `Arrived${vehicle} at ${event.stationId} platform ${event.platform || '-'}`;
+    case 'depart_station':
+      return `Depart${vehicle} from ${event.stationId}`;
+    case 'low_battery_route_to_depot':
+      return `Low battery${vehicle} ${event.battery}% -> ${event.depot}`;
+    case 'charging_started':
+      return `Charging started${vehicle} at ${event.depot} (${event.battery}%)`;
+    case 'charging_complete':
+      return `Charging complete${vehicle} at ${event.depot}`;
+    default:
+      return `${type.replaceAll('_', ' ')}${vehicle}`;
+  }
+}
 
 const CASE_STUDIES = {
   airport_ring: {
@@ -167,6 +219,10 @@ export default function App() {
   const [detailedStation, setDetailedStation] = useState(null);
   const [detailedDepot, setDetailedDepot] = useState(null);
   const [selectedCaseStudy, setSelectedCaseStudy] = useState('airport_ring');
+  const [editingEdge, setEditingEdge] = useState(null);
+  const [edgeDistanceInput, setEdgeDistanceInput] = useState('');
+  const [simSpeedMps, setSimSpeedMps] = useState(15);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [simRunning, setSimRunning] = useState(false);
   const [simMode, setSimMode] = useState('edit');
@@ -180,6 +236,8 @@ export default function App() {
   const [executiveMode, setExecutiveMode] = useState(false);
   const [storyMode, setStoryMode] = useState(false);
   const [analyticsTab, setAnalyticsTab] = useState('overview');
+  const [logFilter, setLogFilter] = useState('all');
+  const [logSearch, setLogSearch] = useState('');
   const [timelineNotes, setTimelineNotes] = useState([]);
   const [snapshotCards, setSnapshotCards] = useState([]);
   const [compareBaseline, setCompareBaseline] = useState(null);
@@ -193,6 +251,7 @@ export default function App() {
 
   const svgRef = useRef(null);
   const importInputRef = useRef(null);
+  const loadInputRef = useRef(null);
   const lastCardMinuteRef = useRef(-1);
 
   const edgeMap = useMemo(() => {
@@ -211,9 +270,21 @@ export default function App() {
   }, [edges]);
 
   const createCore = () => {
-    const core = new UltraSimCore({ nodes, edges, seed: seedInput });
+    const core = new UltraSimCore({
+      nodes,
+      edges,
+      seed: seedInput,
+      settings: {
+        vehicleSpeedMps: simSpeedMps,
+      },
+    });
     const validation = core.validateNetwork();
     return { core, validation };
+  };
+
+  const applySpeedToCore = (nextSpeed) => {
+    if (!simCore.current) return;
+    simCore.current.settings.vehicleSpeedMps = nextSpeed;
   };
 
   const handleMouseMove = (e) => {
@@ -391,6 +462,7 @@ export default function App() {
       setCompareBaseline(null);
       setCompareCurrent(null);
       lastCardMinuteRef.current = -1;
+      setSidebarOpen(true);
     }
     setSimRunning(prev => !prev);
   };
@@ -501,31 +573,41 @@ export default function App() {
     setTimelineNotes([{ t: 0, label: `Imported city network: ${imported.cityName}` }]);
   };
 
-  const handleSave = async () => {
-    if (!window.electronAPI) {
-      alert('Electron IPC not found. Make sure running via desktop mode.');
-      return;
-    }
-
+  const handleSave = () => {
     const data = { nodes, edges, stationCounter, depotCounter };
-    const success = await window.electronAPI.saveFile(data);
-    if (success) alert('Network saved successfully!');
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pod-network-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleLoad = async () => {
-    if (!window.electronAPI) {
-      alert('Electron IPC not found.');
-      return;
-    }
+  const handleLoadClick = () => {
+    loadInputRef.current?.click();
+  };
 
-    const data = await window.electronAPI.openFile();
-    if (!data) return;
-
-    handleStop();
-    setNodes(data.nodes || {});
-    setEdges(normalizeEdges(data.edges || []));
-    setStationCounter(data.stationCounter || 1);
-    setDepotCounter(data.depotCounter || 1);
+  const handleLoadFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        handleStop();
+        setNodes(data.nodes || {});
+        setEdges(normalizeEdges(data.edges || []));
+        setStationCounter(data.stationCounter || 1);
+        setDepotCounter(data.depotCounter || 1);
+        setTimelineNotes([{ t: 0, label: 'Network loaded from file.' }]);
+      } catch (err) {
+        alert('Invalid network file format');
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = null; // clear input
   };
 
   const loadCaseStudy = (key) => {
@@ -544,9 +626,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (Object.keys(nodes).length === 0) {
-      loadCaseStudy('airport_ring');
-    }
+    // Start with a blank canvas by default per user requirements
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => {
+      setSidebarOpen(window.innerWidth >= 1024);
+    };
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   useEffect(() => {
@@ -576,9 +665,17 @@ export default function App() {
     }
 
     const lastEvent = snapshot.recentEvents?.[snapshot.recentEvents.length - 1];
-    if (lastEvent && ['scenario_ended', 'scenario_blocked_corridor', 'scenario_outage', 'charging_complete'].includes(lastEvent.type)) {
+    if (lastEvent && TIMELINE_EVENT_TYPES.has(lastEvent.type)) {
       setTimelineNotes(prev => {
-        const note = { t: snapshot.timeSec, label: `${lastEvent.type.replaceAll('_', ' ')}` };
+        const labelMap = {
+          dispatch_nearest_waiting_group: `dispatch to ${lastEvent.stationId || 'station'} for waiting group`,
+          dispatch_station_ready_pool: `staging pod to ${lastEvent.stationId || 'station'} ready pool`,
+          arrived_platform: `${lastEvent.vehicleId || 'pod'} arrived platform ${lastEvent.platform || '-'}`,
+          boarding_started: `${lastEvent.vehicleId || 'pod'} boarding at ${lastEvent.stationId || 'station'}`,
+          depart_station: `${lastEvent.vehicleId || 'pod'} left ${lastEvent.stationId || 'station'}`,
+          low_battery_route_to_depot: `${lastEvent.vehicleId || 'pod'} low battery -> ${lastEvent.depot || 'depot'}`,
+        };
+        const note = { t: snapshot.timeSec, label: labelMap[lastEvent.type] || `${lastEvent.type.replaceAll('_', ' ')}` };
         if (prev.length > 0 && prev[prev.length - 1].label === note.label) return prev;
         return [...prev, note].slice(-25);
       });
@@ -589,10 +686,59 @@ export default function App() {
   const waitingByStation = snapshot?.waitingByStation || {};
   const simTime = snapshot ? Math.floor(snapshot.timeSec / 60) : 0;
   const chargingPods = vehicles.filter(v => v.state === 'charging').length;
-  const lowBatteryPods = vehicles.filter(v => v.battery < 20).length;
+  const lowBatteryPods = vehicles.filter(v => v.battery < LOW_BATTERY_THRESHOLD_PCT).length;
   const criticalBatteryPods = vehicles.filter(v => v.battery < 8).length;
   const report = snapshot?.report || null;
+  const simSpeedKmh = Math.round(simSpeedMps * 3.6);
   const recentEvents = (snapshot?.recentEvents || []).slice(-8).reverse();
+  const operationsFeed = useMemo(() => {
+    const events = snapshot?.recentEvents || [];
+    return events
+      .slice()
+      .reverse()
+      .map((event) => {
+        const category = eventCategory(event.type);
+        const message = eventSummary(event);
+        return {
+          ...event,
+          category,
+          message,
+        };
+      })
+      .filter((event) => {
+        const categoryOk = logFilter === 'all' || event.category === logFilter;
+        if (!categoryOk) return false;
+        if (!logSearch.trim()) return true;
+        const q = logSearch.trim().toLowerCase();
+        return event.message.toLowerCase().includes(q)
+          || String(event.type || '').toLowerCase().includes(q)
+          || String(event.vehicleId || '').toLowerCase().includes(q)
+          || String(event.stationId || '').toLowerCase().includes(q)
+          || String(event.depot || '').toLowerCase().includes(q);
+      })
+      .slice(0, 140);
+  }, [snapshot, logFilter, logSearch]);
+
+  const exportOperationsLog = () => {
+    if (!operationsFeed.length) return;
+    const data = operationsFeed.map((event) => ({
+      t: event.t,
+      type: event.type,
+      category: event.category,
+      vehicleId: event.vehicleId || null,
+      stationId: event.stationId || null,
+      depot: event.depot || null,
+      message: event.message,
+    }));
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pod-operations-log-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const depotStats = (snapshot?.depotIds || Object.keys(nodes).filter(id => nodes[id]?.type === 'depot')).map(depotId => {
     const chargingVehicles = vehicles.filter(v => v.node === depotId && v.state === 'charging');
     const parkedVehicles = vehicles.filter(v => v.node === depotId && ['idle_empty', 'charging'].includes(v.state));
@@ -615,19 +761,22 @@ export default function App() {
   return (
     <div className="future-shell flex flex-col h-screen text-slate-100 font-sans select-none">
       <div className="future-titlebar h-8 flex items-center px-4 text-xs font-semibold titlebar shadow" style={{ WebkitAppRegion: 'drag' }}>
-        <span>Hermes PRT Simulator - {simMode === 'edit' ? 'Editing Network' : 'Simulation Mode'}</span>
+        <span className="inline-flex items-center gap-2">
+          <Train size={14} />
+          PodFlow Command Nexus - {simMode === 'edit' ? 'Network Design' : 'Live Operations'}
+        </span>
       </div>
 
       <div className="future-toolbar h-16 backdrop-blur border-b flex items-center px-4 justify-between shadow-sm z-10">
         <div className="flex space-x-2 border-r pr-4 border-slate-200 items-center">
-          <ToolbarButton icon={<FolderOpen />} label="Open" onClick={handleLoad} disabled={simMode === 'play'} />
+          <ToolbarButton icon={<FolderOpen />} label="Open" onClick={handleLoadClick} disabled={simMode === 'play'} />
           <ToolbarButton icon={<Save />} label="Save" onClick={handleSave} disabled={simMode === 'play'} />
           <ToolbarButton icon={<Database />} label="Case" onClick={() => loadCaseStudy(selectedCaseStudy)} disabled={simMode === 'play'} />
           <ToolbarButton icon={<FileUp />} label="Import" onClick={handleImportCityClick} disabled={simMode === 'play'} />
-          <ToolbarButton icon={<RefreshCcw />} label="Clear" onClick={() => { setNodes({}); setEdges([]); setStationCounter(1); setDepotCounter(1); }} disabled={simMode === 'play'} />
+          <ToolbarButton icon={<RefreshCcw />} label="Clear" onClick={() => { setNodes({}); setEdges([]); setStationCounter(1); setDepotCounter(1); setDetailedStation(null); setDetailedDepot(null); }} disabled={simMode === 'play'} />
           <select
             value={selectedCaseStudy}
-            onChange={(event) => setSelectedCaseStudy(event.target.value)}
+            onChange={(event) => loadCaseStudy(event.target.value)}
             disabled={simMode === 'play'}
             className="h-8 rounded border border-cyan-500/30 text-xs px-2 text-cyan-100 bg-slate-900/70"
           >
@@ -652,10 +801,12 @@ export default function App() {
           <ToolbarButton icon={<FastForward className="text-blue-500" />} label="Warmup" onClick={handleFastForward} disabled={simMode === 'edit'} />
           {simMode === 'play' && <ToolbarButton icon={<Repeat className="text-violet-500" />} label="Replay" onClick={handleReplayFromSeed} />}
           {simMode === 'play' && <ToolbarButton icon={<BarChart3 className="text-slate-700" />} label={executiveMode ? 'Ops' : 'Exec'} onClick={() => setExecutiveMode(prev => !prev)} />}
+          {simMode === 'play' && <ToolbarButton icon={sidebarOpen ? <PanelRightClose /> : <PanelRightOpen />} label="Panel" onClick={() => setSidebarOpen(prev => !prev)} />}
         </div>
       </div>
 
       <input ref={importInputRef} type="file" accept=".kmz" className="hidden" onChange={handleImportCity} />
+      <input ref={loadInputRef} type="file" accept=".json" className="hidden" onChange={handleLoadFile} />
 
       <div className="future-main flex flex-1 overflow-hidden relative">
         <svg ref={svgRef} className="w-full h-full cursor-crosshair" onMouseMove={handleMouseMove} onClick={handleCanvasClick} onMouseUp={handleNodeMouseUp} onMouseLeave={handleNodeMouseUp}>
@@ -677,6 +828,9 @@ export default function App() {
             const cp = getQuadraticControlPoint(n1, n2, edge.curve);
             const strokeColor = edge.curve >= 0 ? '#334155' : '#64748b';
             const isHovering = hoverEdge?.from === edge.from && hoverEdge?.to === edge.to;
+            const pathDistance = typeof edge.distance === 'number'
+              ? edge.distance
+              : Math.round(Math.hypot(n2.x - n1.x, n2.y - n1.y));
 
             return (
               <g key={edgeKey(edge.from, edge.to)}>
@@ -688,7 +842,13 @@ export default function App() {
                   markerEnd="url(#arrow)"
                   onClick={(event) => {
                     if (mode === 'curve_link') handleCurveClick(event, edge);
-                    if (mode === 'delink') handleDeleteEdge(event, edge);
+                    else if (mode === 'delink') handleDeleteEdge(event, edge);
+                    else if (simMode === 'edit' && mode !== 'add_link') {
+                      event.stopPropagation();
+                      setEditingEdge(edge);
+                      const physicalDist = Math.hypot(n2.x - n1.x, n2.y - n1.y);
+                      setEdgeDistanceInput(typeof edge.distance === 'number' ? edge.distance : Math.round(physicalDist));
+                    }
                   }}
                   onMouseDown={(event) => handleEdgeMouseDown(event, edge)}
                   onMouseUp={handleEdgeMouseUp}
@@ -697,6 +857,37 @@ export default function App() {
                   className={mode === 'curve_link' || mode === 'delink' ? 'cursor-pointer' : ''}
                   style={{ opacity: isHovering ? 0.9 : 0.7 }}
                 />
+                <g
+                  transform={`translate(${cp.x}, ${cp.y})`}
+                  onClick={(event) => {
+                    if (simMode !== 'edit') return;
+                    if (mode === 'curve_link') {
+                      handleCurveClick(event, edge);
+                      return;
+                    }
+                    if (mode === 'delink') {
+                      handleDeleteEdge(event, edge);
+                      return;
+                    }
+                    event.stopPropagation();
+                    setEditingEdge(edge);
+                    setEdgeDistanceInput(pathDistance);
+                  }}
+                  className="cursor-pointer"
+                >
+                  <rect
+                    x="-28"
+                    y="-9"
+                    width="56"
+                    height="18"
+                    rx="6"
+                    fill={isHovering ? 'rgba(8,47,73,0.96)' : 'rgba(15,23,42,0.92)'}
+                    stroke="rgba(34,211,238,0.38)"
+                  />
+                  <text y="4" fontSize="9" fill="#bae6fd" textAnchor="middle" fontWeight="700">
+                    {Math.round(pathDistance)}m
+                  </text>
+                </g>
                 {/* Curve control point (only in curve_link mode) */}
                 {mode === 'curve_link' && (
                   <circle
@@ -733,11 +924,25 @@ export default function App() {
               className={draggingNode === node.name ? 'cursor-grabbing' : mode === 'select' ? 'cursor-grab' : 'cursor-pointer'}
             >
               {node.type === 'depot' ? (
-                <polygon points="0,-16 16,0 0,16 -16,0" fill={draggingNode === node.name || hoverNode === node.name ? '#fde047' : '#facc15'} stroke="#334155" strokeWidth="3" />
+                <g>
+                  {(draggingNode === node.name || hoverNode === node.name) && (
+                    <circle r="21" fill="#fb923c" opacity="0.28" className="animate-pulse" />
+                  )}
+                  <rect x="-16" y="-12" width="32" height="24" rx="6" fill={draggingNode === node.name || hoverNode === node.name ? '#fdba74' : '#f97316'} stroke="#7c2d12" strokeWidth="2.5" />
+                  <path d="M-7 -2 h14 M0 -6 v12" stroke="#ffedd5" strokeWidth="2.5" strokeLinecap="round" />
+                  <circle cx="0" cy="8" r="2" fill="#fff7ed" />
+                </g>
               ) : (
-                <circle r="12" fill={draggingNode === node.name || hoverNode === node.name ? '#60a5fa' : '#3b82f6'} stroke="#334155" strokeWidth="3" />
+                <g>
+                  {(draggingNode === node.name || hoverNode === node.name) && (
+                    <circle r="18" fill="#38bdf8" opacity="0.3" className="animate-pulse" />
+                  )}
+                  <circle r="13" fill={draggingNode === node.name || hoverNode === node.name ? '#22d3ee' : '#0ea5e9'} stroke="#0f172a" strokeWidth="2.5" />
+                  <circle r="7" fill="#082f49" stroke="#67e8f9" strokeWidth="1.5" />
+                  <path d="M-4 -1.5 L0 -5 L4 -1.5 M0 -5 V5" stroke="#cffafe" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
               )}
-              <text y="24" fontSize="11" fill="#334155" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{node.name}</text>
+              <text y="24" fontSize="11" fill="#0f172a" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{node.name}</text>
 
               {simMode === 'play' && node.type === 'station' && waitingByStation[node.name] > 0 && (
                 <g transform="translate(12, -18)">
@@ -786,272 +991,332 @@ export default function App() {
           })}
         </svg>
 
+        {simMode === 'play' && sidebarOpen && (
+          <button
+            type="button"
+            className="absolute inset-0 z-10 bg-slate-950/40 lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close sidebar"
+          />
+        )}
+
         {simMode === 'play' && (
-          <div className="future-sidebar absolute right-0 top-0 bottom-0 w-[22rem] border-l shadow-xl flex flex-col pointer-events-auto z-20">
-            <div className="p-4 bg-slate-900/90 text-cyan-100 font-semibold text-sm border-b border-cyan-500/20">Simulation Metrics</div>
-
-            <div className="p-2 border-b border-slate-700 bg-slate-900/70 grid grid-cols-5 gap-1 text-[10px]">
-              <AnalyticsTabButton label="Overview" active={analyticsTab === 'overview'} onClick={() => setAnalyticsTab('overview')} />
-              <AnalyticsTabButton label="Story" active={analyticsTab === 'story'} onClick={() => setAnalyticsTab('story')} />
-              <AnalyticsTabButton label="Depot" active={analyticsTab === 'depot'} onClick={() => setAnalyticsTab('depot')} />
-              <AnalyticsTabButton label="Timeline" active={analyticsTab === 'timeline'} onClick={() => setAnalyticsTab('timeline')} />
-              <AnalyticsTabButton label="Demand" active={analyticsTab === 'demand'} onClick={() => setAnalyticsTab('demand')} />
-            </div>
-
-            {(analyticsTab === 'overview' || analyticsTab === 'story') && (
-              <div className="p-3 border-b border-slate-200 bg-white text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-600">Seed</span>
-                  <input value={seedInput} onChange={(event) => setSeedInput(event.target.value)} className="w-40 border border-slate-300 rounded px-2 py-1 text-[11px]" />
-                </div>
-                {importedCityName && <div className="text-[10px] text-blue-700">Imported: {importedCityName}</div>}
-              </div>
-            )}
-
-            {analyticsTab === 'overview' && executiveMode && report && (
-              <div className="p-3 border-b border-slate-200 bg-slate-50">
-                <h3 className="text-[11px] font-bold text-slate-600 uppercase mb-2">Executive KPIs</h3>
-                <div className="grid grid-cols-2 gap-2 text-[10px]">
-                  <KpiCard label="Served" value={report.servedGroups} tone="blue" />
-                  <KpiCard label="Mean Wait" value={`${report.meanWaitSec}s`} tone="amber" />
-                  <KpiCard label="Utilization" value={`${report.utilizationPct}%`} tone="emerald" />
-                  <KpiCard label="Reliability" value={`${report.reliabilityPct}%`} tone="cyan" />
-                  <KpiCard label="Energy" value={report.energyUnits} tone="slate" />
-                  <KpiCard label="Congestion" value={report.congestionIndex} tone="rose" />
-                </div>
-              </div>
-            )}
-
-            {analyticsTab === 'overview' && (
-              <div className="p-4 text-xs font-mono space-y-2 border-b border-slate-200 bg-slate-50">
-                <div className="flex justify-between"><span>Time:</span> <span>{Math.floor(simTime / 60).toString().padStart(2, '0')}:{(simTime % 60).toString().padStart(2, '0')}</span></div>
-                <div className="flex justify-between"><span>Active Pods:</span> <span>{vehicles.length}</span></div>
-                <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
-                  <div className="rounded bg-yellow-100 text-yellow-800 px-2 py-1 text-center">Charging: {chargingPods}</div>
-                  <div className="rounded bg-orange-100 text-orange-800 px-2 py-1 text-center">Low: {lowBatteryPods}</div>
-                  <div className="rounded bg-red-100 text-red-800 px-2 py-1 text-center">Critical: {criticalBatteryPods}</div>
-                </div>
-              </div>
-            )}
-
-            {analyticsTab === 'story' && (
-            <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
-              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Story Mode</h3>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setStoryMode(prev => !prev)} className={`rounded px-2 py-1 text-[10px] ${storyMode ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
-                  {storyMode ? 'Story On' : 'Story Off'}
+          <div className={`future-sidebar absolute right-0 top-0 bottom-0 w-[90vw] max-w-[26rem] lg:w-[26rem] border-l shadow-xl flex flex-col pointer-events-auto z-20 transform transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="p-4 bg-gradient-to-r from-slate-50 to-cyan-50 border-b border-slate-200">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-lg font-bold text-slate-800">Control Panel</h2>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="lg:hidden p-1 hover:bg-slate-200 rounded"
+                  aria-label="Close"
+                >
+                  <X size={20} className="text-slate-600" />
                 </button>
-                <select value={scenarioChoice} onChange={(event) => setScenarioChoice(event.target.value)} className="flex-1 border border-slate-300 rounded px-2 py-1 text-[10px]">
-                  <option value="peak_hour_surge">Peak-hour surge</option>
-                  <option value="outage">Station outage</option>
-                  <option value="blocked_corridor">Blocked corridor</option>
-                  <option value="depot_overload">Depot overload</option>
-                </select>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={handleStartScenario} className="rounded bg-indigo-600 hover:bg-indigo-700 text-white py-1 text-[10px]">Start Scenario</button>
-                <button onClick={handleInjectDisruption} className="rounded bg-rose-600 hover:bg-rose-700 text-white py-1 text-[10px]">Inject Disruption</button>
-                <button onClick={handleCompare} className="rounded bg-slate-700 hover:bg-slate-800 text-white py-1 text-[10px]">Compare B/A</button>
-                <button onClick={handleReplayFromSeed} className="rounded bg-violet-600 hover:bg-violet-700 text-white py-1 text-[10px]">Replay Seed</button>
+              <p className="text-xs text-slate-600">Real-time pod network simulation</p>
+            </div>
+
+            {/* Quick Start Section - Always Visible */}
+            <div className="p-4 bg-white border-b border-slate-200 space-y-4">
+              {/* Status Badges */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-lg bg-gradient-to-br from-blue-50 to-blue-100 p-3 border border-blue-200">
+                  <div className="text-[10px] uppercase text-blue-700 font-bold tracking-wide">Active</div>
+                  <div className="text-2xl font-bold text-blue-900">{vehicles.length}</div>
+                  <div className="text-[10px] text-blue-700">pods</div>
+                </div>
+                <div className="rounded-lg bg-gradient-to-br from-emerald-50 to-emerald-100 p-3 border border-emerald-200">
+                  <div className="text-[10px] uppercase text-emerald-700 font-bold tracking-wide">Served</div>
+                  <div className="text-2xl font-bold text-emerald-900">{simCore.current?.getResults()?.totalServedGroups || 0}</div>
+                  <div className="text-[10px] text-emerald-700">trips</div>
+                </div>
+                <div className="rounded-lg bg-gradient-to-br from-amber-50 to-amber-100 p-3 border border-amber-200">
+                  <div className="text-[10px] uppercase text-amber-700 font-bold tracking-wide">Time</div>
+                  <div className="text-2xl font-bold text-amber-900">{Math.floor(simTime / 60).toString().padStart(2, '0')}:{(simTime % 60).toString().padStart(2, '0')}</div>
+                  <div className="text-[10px] text-amber-700">sim time</div>
+                </div>
               </div>
-              {compareBaseline && compareCurrent && (
-                <div className="rounded border border-slate-200 bg-slate-50 p-2 text-[10px]">
-                  <div>Wait delta: {(compareCurrent.meanWaitSec - compareBaseline.meanWaitSec).toFixed(2)}s</div>
-                  <div>Reliability delta: {(compareCurrent.reliabilityPct - compareBaseline.reliabilityPct).toFixed(2)}%</div>
-                  <div>Utilization delta: {(compareCurrent.utilizationPct - compareBaseline.utilizationPct).toFixed(2)}%</div>
+
+              {/* Pod Status at a Glance */}
+              <div className="rounded-lg border border-slate-200 p-3 space-y-2 bg-slate-50">
+                <div className="text-xs font-bold text-slate-700 uppercase tracking-wide">Pod Status</div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 bg-green-500 rounded-full"></span>
+                    <span>Active: {vehicles.filter(v => ['moving_loaded', 'boarding', 'approaching_platform'].includes(v.state)).length}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 bg-red-500 rounded-full"></span>
+                    <span>Empty: {vehicles.filter(v => v.state === 'idle_empty').length}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 bg-yellow-500 rounded-full"></span>
+                    <span>Charging: {chargingPods}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 bg-orange-500 rounded-full"></span>
+                    <span>Low Battery: {lowBatteryPods}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Most Important Action: Add Pod */}
+              {vehicles.length === 0 && Object.values(waitingByStation).some(v => v > 0) && (
+                <div className="rounded-lg bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-300 p-3 space-y-2">
+                  <div className="font-bold text-sm text-orange-900">🤔 Waiting Groups Detected</div>
+                  <div className="text-xs text-orange-800">You have groups waiting but no pods! Open the Add Pod section below to start serving passengers.</div>
                 </div>
               )}
-            </div>
-            )}
 
-            {analyticsTab === 'overview' && (
-            <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2 text-xs">
-              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Export Reports</h3>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={handleExportCsv} className="rounded bg-emerald-600 hover:bg-emerald-700 text-white py-1 text-[10px] flex items-center justify-center gap-1"><FileDown size={12} /> CSV</button>
-                <button onClick={handleExportPdfLike} className="rounded bg-sky-600 hover:bg-sky-700 text-white py-1 text-[10px] flex items-center justify-center gap-1"><FileDown size={12} /> PDF Brief</button>
-              </div>
-            </div>
-            )}
-
-            {analyticsTab === 'depot' && (
-            <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2">
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Add Pod At Depot</h3>
-              <input
-                value={podIdInput}
-                onChange={(event) => setPodIdInput(event.target.value)}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-xs"
-                placeholder="Unique pod ID"
-              />
-              <select
-                value={selectedDepot}
-                onChange={(event) => setSelectedDepot(event.target.value)}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-xs"
-              >
-                {(snapshot?.depotIds || []).map(depot => (
-                  <option key={depot} value={depot}>{depot}</option>
-                ))}
-              </select>
-              <button onClick={handleAddPod} className="w-full bg-blue-600 hover:bg-blue-700 transition-colors text-white rounded text-xs py-1.5 flex items-center justify-center gap-1">
-                <Plus size={14} /> Add Pod
-              </button>
-            </div>
-            )}
-
-            {analyticsTab === 'overview' && (
-            <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
-              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Color Legend</h3>
-              <LegendRow color="bg-red-500" text="Red: Empty / Repositioning" />
-              <LegendRow color="bg-green-500" text="Green: Boarding / Loaded / Docking" />
-              <LegendRow color="bg-blue-500" text="Blue: Unloading" />
-              <LegendRow color="bg-slate-400" text="Grey: Waiting slot" />
-              <LegendRow color="bg-yellow-500" text="Yellow: Charging at depot" />
-            </div>
-            )}
-
-            {analyticsTab === 'depot' && (
-            <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-2 text-xs">
-              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Battery & Charge Events</h3>
-              <div className="max-h-28 overflow-y-auto custom-scrollbar space-y-1">
-                {recentEvents.length === 0 && <div className="text-slate-400">No recent events.</div>}
-                {recentEvents.map((event, idx) => {
-                  const isChargeEvent = ['low_battery_route_to_depot', 'charging_started', 'charging_complete'].includes(event.type);
-                  if (!isChargeEvent) return null;
-                  const minute = Math.floor((event.t || 0) / 60).toString().padStart(2, '0');
-                  const second = Math.floor((event.t || 0) % 60).toString().padStart(2, '0');
-                  return (
-                    <div key={`${event.type}-${event.vehicleId}-${event.t}-${idx}`} className="rounded border border-slate-200 bg-white px-2 py-1">
-                      <div className="font-semibold text-slate-700">[{minute}:{second}] {event.vehicleId}</div>
-                      {event.type === 'low_battery_route_to_depot' && (
-                        <div className="text-orange-700">Low battery {event.battery}% → routing to {event.depot}</div>
-                      )}
-                      {event.type === 'charging_started' && (
-                        <div className="text-yellow-700">Started charging at {event.depot} ({event.battery}%)</div>
-                      )}
-                      {event.type === 'charging_complete' && (
-                        <div className="text-emerald-700">Charging complete at {event.depot} ({event.battery}%)</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            )}
-
-            {analyticsTab === 'depot' && (
-            <div className="p-4 border-b border-slate-200 bg-white space-y-2 text-xs">
-              <h3 className="font-bold text-slate-500 uppercase tracking-wider">Depot Inner Working</h3>
-              <div className="max-h-44 overflow-y-auto custom-scrollbar space-y-2">
-                {depotStats.map(depot => (
-                  <div key={depot.depotId} className="rounded border border-slate-200 bg-slate-50 p-2 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700">{depot.depotId}</span>
-                      <span className="text-[10px] text-slate-500">parked {depot.parkedVehicles.length}</span>
-                    </div>
-
-                    <div className="flex gap-1 text-[10px]">
-                      <span className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">Charging {depot.chargingVehicles.length}</span>
-                      <span className="rounded bg-blue-100 text-blue-800 px-1.5 py-0.5">Inbound {depot.inboundChargeVehicles.length}</span>
-                    </div>
-
-                    {depot.chargingVehicles.length === 0 && (
-                      <div className="text-[10px] text-slate-400">No pod charging right now.</div>
-                    )}
-
-                    {depot.chargingVehicles.map(v => {
-                      const pct = Math.max(0, Math.min(100, Math.round(v.battery || 0)));
-                      return (
-                        <div key={v.id} className="rounded bg-white border border-slate-200 p-1.5">
-                          <div className="flex items-center justify-between text-[10px] mb-1">
-                            <span className="font-semibold text-slate-700">{v.id}</span>
-                            <span className="text-amber-700">{pct}%</span>
-                          </div>
-                          <div className="h-1.5 bg-slate-200 rounded overflow-hidden">
-                            <div className="h-full bg-amber-500 transition-all duration-300" style={{ width: `${pct}%` }} />
-                          </div>
-                          <div className="text-[9px] text-slate-500 mt-1">Leaves depot only at 100%</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            </div>
-            )}
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-              {analyticsTab === 'timeline' && (
-              <>
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Timeline</h3>
-              <div className="space-y-1 max-h-24 overflow-y-auto custom-scrollbar">
-                {timelineNotes.length === 0 && <div className="text-[10px] text-slate-400">No annotations yet.</div>}
-                {timelineNotes.slice(-8).map((note, idx) => (
-                  <div key={`${note.t}-${idx}`} className="text-[10px] rounded border border-slate-200 bg-white px-2 py-1">
-                    [{Math.floor(note.t / 60).toString().padStart(2, '0')}:{Math.floor(note.t % 60).toString().padStart(2, '0')}] {note.label}
-                  </div>
-                ))}
-              </div>
-
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Snapshot Cards</h3>
-              <div className="space-y-1 max-h-28 overflow-y-auto custom-scrollbar">
-                {snapshotCards.length === 0 && <div className="text-[10px] text-slate-400">Cards auto-generate every 2 minutes.</div>}
-                {snapshotCards.map((card, idx) => (
-                  <div key={`${card.t}-${idx}`} className="text-[10px] rounded border border-slate-200 bg-white px-2 py-1">
-                    <div className="font-semibold text-slate-700">{card.title}</div>
-                    <div>Wait {card.meanWaitSec}s | Util {card.utilizationPct}% | Reliability {card.reliabilityPct}%</div>
-                  </div>
-                ))}
-              </div>
-              </>
-              )}
-
-              {analyticsTab === 'demand' && (
-              <>
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Station Demand</h3>
-              {Object.keys(nodes).filter(id => nodes[id].type === 'station').map(stationId => (
-                <div key={stationId} className="space-y-1">
-                  <div className="flex justify-between text-xs text-slate-600">
-                    <span className="font-semibold">{stationId}</span>
-                    <span>{(simCore.current?.stationDemand?.[stationId] || 0) * 10}%</span>
-                  </div>
+              {/* Speed Control */}
+              <div className="rounded-lg border border-slate-200 p-3 space-y-2 bg-gradient-to-br from-cyan-50 to-blue-50">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wide">Pod Speed</div>
+                  <span className="font-mono text-sm font-bold text-slate-900">{simSpeedMps.toFixed(1)} m/s</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Gauge size={14} className="text-cyan-600" />
                   <input
                     type="range"
-                    min="0"
-                    max="10"
-                    defaultValue={simCore.current?.stationDemand?.[stationId] || 1}
-                    className="w-full h-1 bg-slate-300 rounded-lg appearance-none cursor-pointer"
+                    min={MIN_POD_SPEED_MPS}
+                    max={MAX_POD_SPEED_MPS}
+                    step="0.5"
+                    value={simSpeedMps}
                     onChange={(event) => {
-                      if (!simCore.current) return;
-                      const newDemand = {
-                        ...simCore.current.stationDemand,
-                        [stationId]: parseInt(event.target.value, 10),
-                      };
-                      simCore.current.setStationDemand(newDemand);
-                      setSnapshot({ ...simCore.current.getSnapshot() });
+                      const nextSpeed = Number(event.target.value);
+                      setSimSpeedMps(nextSpeed);
+                      applySpeedToCore(nextSpeed);
                     }}
+                    className="w-full h-2 bg-slate-300 rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
-              ))}
-              </>
+                <div className="text-[10px] text-slate-600">Range 5-30 m/s (18-108 km/h)</div>
+              </div>
+            </div>
+
+            {/* Tabs Navigation */}
+            <div className="p-2 border-b border-slate-200 bg-slate-50 flex gap-1 overflow-x-auto">
+              <AnalyticsTabButton label="Overview" active={analyticsTab === 'overview'} onClick={() => setAnalyticsTab('overview')} />
+              <AnalyticsTabButton label="Pods" active={analyticsTab === 'depot'} onClick={() => setAnalyticsTab('depot')} />
+              <AnalyticsTabButton label="Demand" active={analyticsTab === 'demand'} onClick={() => setAnalyticsTab('demand')} />
+              <AnalyticsTabButton label="Events" active={analyticsTab === 'ops'} onClick={() => setAnalyticsTab('ops')} />
+            </div>
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
+              
+              {/* Overview Tab */}
+              {analyticsTab === 'overview' && (
+                <>
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-bold text-slate-600 uppercase tracking-wide">Mean Wait Time</div>
+                      <div className="text-3xl font-bold text-slate-900">{simCore.current?.getResults()?.overallMeanWaitSec || 0}s</div>
+                      <div className="text-xs text-slate-500">Average time passengers wait</div>
+                    </div>
+
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
+                      <div className="text-xs font-bold text-slate-600 uppercase tracking-wide">Quick Legend</div>
+                      <div className="grid grid-cols-1 gap-1.5 text-[10px]">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-3 h-3 bg-red-500 rounded-full"></span>
+                          <span className="text-slate-700">Red = Empty / Moving to pick up</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-3 h-3 bg-green-500 rounded-full"></span>
+                          <span className="text-slate-700">Green = Carrying passengers</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-3 h-3 bg-yellow-500 rounded-full"></span>
+                          <span className="text-slate-700">Yellow = Charging at depot</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-3 h-3 bg-orange-500 rounded-full"></span>
+                          <span className="text-slate-700">Orange = Low battery warning</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button onClick={handleExportCsv} className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white py-2 text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
+                      <FileDown size={16} /> Export Data as CSV
+                    </button>
+                  </div>
+                </>
               )}
 
-              {(analyticsTab === 'overview' || analyticsTab === 'story' || analyticsTab === 'depot') && (
-                <div className="text-[10px] text-slate-400">
-                  Open Timeline or Demand tabs for detailed drill-down pages.
-                </div>
+              {/* Pods (Depot) Tab */}
+              {analyticsTab === 'depot' && (
+                <>
+                  <div className="rounded-lg border border-blue-300 bg-gradient-to-r from-blue-50 to-cyan-50 p-3 space-y-2">
+                    <div className="text-sm font-bold text-blue-900">➕ Add a New Pod</div>
+                    <p className="text-xs text-blue-800">Each pod charges fully (100%) before leaving the depot:</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wide block mb-1">Pod ID Name</label>
+                      <input
+                        value={podIdInput}
+                        onChange={(event) => setPodIdInput(event.target.value)}
+                        className="w-full border-2 border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none"
+                        placeholder="e.g., POD-001"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wide block mb-1">Starting Depot</label>
+                      <select
+                        value={selectedDepot}
+                        onChange={(event) => setSelectedDepot(event.target.value)}
+                        className="w-full border-2 border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none"
+                      >
+                        {(snapshot?.depotIds || []).map(depot => (
+                          <option key={depot} value={depot}>{depot}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button onClick={handleAddPod} className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white rounded-lg py-2.5 font-bold text-sm flex items-center justify-center gap-2 transition-all">
+                      <Plus size={16} /> Add Pod Now
+                    </button>
+                  </div>
+
+                  <div className="h-px bg-slate-200"></div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-slate-600 uppercase tracking-wide">Charging Status</div>
+                    <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-2">
+                      {depotStats.length === 0 && <div className="text-xs text-slate-400">No pods created yet.</div>}
+                      {depotStats.map(depot => (
+                        <div key={depot.depotId} className="rounded-lg border border-slate-200 bg-white p-3">
+                          <div className="font-bold text-sm text-slate-800 mb-2">{depot.depotId}</div>
+                          {depot.chargingVehicles.length === 0 && depot.parkedVehicles.length === 0 && (
+                            <div className="text-xs text-slate-500">No pods.</div>
+                          )}
+                          {depot.chargingVehicles.map(v => {
+                            const pct = Math.max(0, Math.min(100, Math.round(v.battery || 0)));
+                            return (
+                              <div key={v.id} className="mb-2">
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="font-semibold text-slate-700">{v.id}</span>
+                                  <span className="text-amber-700 font-bold">{pct}% charged</span>
+                                </div>
+                                <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                                  <div className="h-full bg-gradient-to-r from-amber-400 to-amber-600 transition-all duration-300" style={{ width: `${pct}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
+
+              {/* Demand Tab */}
+              {analyticsTab === 'demand' && (
+                <>
+                  <div className="rounded-lg border border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 p-3">
+                    <div className="text-sm font-bold text-orange-900">📊 Set Passenger Demand</div>
+                    <p className="text-xs text-orange-800 mt-1">Drag sliders to set expected groups per 30-minute period from each station:</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {Object.keys(nodes).filter(id => nodes[id].type === 'station').map(stationId => (
+                      <div key={stationId} className="rounded-lg border border-slate-200 bg-white p-3">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="font-semibold text-slate-800">{stationId}</span>
+                          <span className="font-mono bg-slate-100 text-slate-800 px-2 py-1 rounded text-xs font-bold">
+                            {simCore.current?.stationDemand?.[stationId] || 0}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="50"
+                          value={simCore.current?.stationDemand?.[stationId] || 0}
+                          className="w-full h-2.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-cyan-600"
+                          onChange={(event) => {
+                            if (!simCore.current) return;
+                            const newDemand = {
+                              ...simCore.current.stationDemand,
+                              [stationId]: parseInt(event.target.value, 10),
+                            };
+                            simCore.current.setStationDemand(newDemand);
+                            setSnapshot({ ...simCore.current.getSnapshot() });
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Events Tab */}
+              {analyticsTab === 'ops' && (
+                <>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={logFilter}
+                        onChange={(event) => setLogFilter(event.target.value)}
+                        className="border-2 border-slate-300 rounded-lg px-2 py-2 text-xs font-semibold focus:border-cyan-500 focus:outline-none"
+                      >
+                        <option value="all">All Events</option>
+                        <option value="dispatch">Dispatch</option>
+                        <option value="passenger">Passenger</option>
+                        <option value="battery">Battery</option>
+                        <option value="scenario">Scenario</option>
+                        <option value="system">System</option>
+                      </select>
+                      <button onClick={exportOperationsLog} className="rounded-lg bg-slate-600 hover:bg-slate-700 text-white py-2 text-xs font-semibold flex items-center justify-center gap-1 transition-colors">
+                        <FileDown size={14} /> Export
+                      </button>
+                    </div>
+                    <input
+                      value={logSearch}
+                      onChange={(event) => setLogSearch(event.target.value)}
+                      className="w-full border-2 border-slate-300 rounded-lg px-3 py-2 text-xs focus:border-cyan-500 focus:outline-none"
+                      placeholder="Search by pod ID or station..."
+                    />
+                  </div>
+
+                  <div className="text-[11px] text-slate-600 font-semibold">Showing {operationsFeed.length} recent events</div>
+
+                  <div className="max-h-[28rem] overflow-y-auto custom-scrollbar space-y-1.5">
+                    {operationsFeed.length === 0 && (
+                      <div className="rounded-lg bg-slate-50 border border-slate-200 p-4 text-center text-sm text-slate-500">
+                        No events match the current filter.
+                      </div>
+                    )}
+                    {operationsFeed.map((event, idx) => (
+                      <div key={`${event.t}-${event.type}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-mono text-xs font-bold text-slate-700">
+                            [{Math.floor((event.t || 0) / 60).toString().padStart(2, '0')}:{Math.floor((event.t || 0) % 60).toString().padStart(2, '0')}]
+                          </span>
+                          <span className="uppercase tracking-wider text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-bold">{event.category}</span>
+                        </div>
+                        <div className="text-xs text-slate-800">{event.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
             </div>
           </div>
         )}
-      </div>
 
       <div className="future-statusbar h-6 border-t flex items-center px-4 text-[10px] font-semibold justify-between z-10">
         <div>
           {simMode === 'edit'
             ? `EDIT MODE | Tool: ${mode.toUpperCase()} | Nodes: ${Object.keys(nodes).length} | Corridors: ${uniqueCorridorCount} (2-way)`
-            : `SIMULATION RUNNING${report ? ` | Seed ${report.seed}` : ''}`}
+            : `SIMULATION RUNNING${report ? ` | Seed ${report.seed}` : ''} | Speed ${simSpeedMps.toFixed(1)}m/s`}
         </div>
         {simMode === 'play' && <div>Wait Avg: {simCore.current?.getResults()?.overallMeanWaitSec}s | Serviced: {simCore.current?.getResults()?.totalServedGroups}</div>}
+      </div>
       </div>
 
       {detailedStation && (
@@ -1068,6 +1333,71 @@ export default function App() {
           snapshot={snapshot}
           onClose={() => setDetailedDepot(null)}
         />
+      )}
+
+      {editingEdge && (
+        <div className="absolute top-20 left-20 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl p-4 w-64 z-50 text-slate-200">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">Edit Corridor</h3>
+            <button onClick={() => setEditingEdge(null)} className="text-slate-400 hover:text-white"><X size={16} /></button>
+          </div>
+          <div className="text-[10px] text-slate-400 mb-3 break-words">
+            {editingEdge.from} ➔ {editingEdge.to}
+          </div>
+          <div className="text-[10px] text-cyan-300 mb-2">
+            Click any corridor label to edit distance instantly.
+          </div>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Distance (meters)</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={edgeDistanceInput}
+                  onChange={(e) => setEdgeDistanceInput(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
+                />
+              </div>
+            </div>
+            
+            <button 
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white rounded py-1.5 text-[11px] font-bold mt-2 transition-colors"
+              onClick={() => {
+                const updatedDist = Number(edgeDistanceInput);
+                if (!Number.isFinite(updatedDist) || updatedDist <= 0) {
+                  alert('Distance must be a positive number in meters.');
+                  return;
+                }
+                setEdges(prev => prev.map(e => {
+                  if (e.from === editingEdge.from && e.to === editingEdge.to) {
+                    return { ...e, distance: updatedDist };
+                  }
+                  if (e.from === editingEdge.to && e.to === editingEdge.from) {
+                    return { ...e, distance: updatedDist };
+                  }
+                  return e;
+                }));
+                setEditingEdge(null);
+              }}
+            >
+              SAVE CORRIDOR
+            </button>
+            
+            <button
+               className="w-full bg-slate-700 hover:bg-slate-600 text-white rounded py-1.5 text-[11px] font-bold mt-1 transition-colors"
+               onClick={() => {
+                  // physical distance
+                  const n1 = nodes[editingEdge.from];
+                  const n2 = nodes[editingEdge.to];
+                  if (n1 && n2) {
+                     setEdgeDistanceInput(Math.round(Math.hypot(n2.x - n1.x, n2.y - n1.y)));
+                  }
+               }}
+            >
+               RESET TO CANVAS DIST
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1090,9 +1420,9 @@ function AnalyticsTabButton({ label, active, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded px-2 py-1 border transition-all ${active
-        ? 'bg-cyan-500/20 text-cyan-100 border-cyan-400/60 shadow-[0_0_16px_-8px_rgba(34,211,238,0.9)]'
-        : 'bg-slate-800/70 text-slate-300 border-slate-600/70 hover:border-cyan-500/40 hover:text-cyan-100'}`}
+      className={`rounded-lg px-3 py-2 border-2 transition-all text-xs font-semibold ${active
+        ? 'bg-cyan-500 text-white border-cyan-600 shadow-md'
+        : 'bg-white text-slate-700 border-slate-200 hover:border-cyan-400 hover:text-cyan-600'}`}
     >
       {label}
     </button>
